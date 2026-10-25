@@ -347,6 +347,8 @@ def update_data():
     global DTLIST, DIVH
     DTLIST = load_dtlist(trading[-1][0])
     DIVH = load_divhist(trading[-1][0])
+    global NOLIM
+    NOLIM = load_nolimit(trading[-1][0])
     global EXTRA, TAIEX_RET20, DATES
     log("下載財報、董監持股質押、外資持股、重大訊息…")
     EXTRA = load_extra(trading[-1][0])
@@ -798,6 +800,7 @@ def build_report(taiex, last_date):
         "daytrade": daytrade_list(latest),
         "divs": div_list(latest),
         "etfs": etf_list(latest),
+        "nolimit": nolimit_list(all_a, last_date),
         "all": [[a["code"], a["name"], a["market"], sec_type(a["code"]) if is_nonstock(a["code"]) else (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
                  a["chg_pct"], a["vol"], sv_of(a)["verdict"], sv_of(a)["vc"]] + sv_of(a)["row"]
                 for a in sorted(latest, key=lambda x: x["code"])],
@@ -1123,6 +1126,8 @@ def stock_detail(code):
     o["stype"] = sec_type(code)
     o["dt"] = daytrade_info(a)
     o["dv"] = div_analysis(a)
+    if code in NOLIM:
+        o["nolim"] = nolimit_reason(code, None)[1]
     s = HIST[code]
     k = min(60, len(s["c"]))
     o["ohlc"] = [[s["o"][i], s["h"][i], s["l"][i], s["c"][i], s["v"][i]] for i in range(len(s["c"]) - k, len(s["c"]))]
@@ -1619,6 +1624,107 @@ def etf_list(latest):
                     "dv": d.get("verdict"), "dvc": d.get("vc"), "value": round(a["vol"] * a["close"] / 1e5, 1)})
     out.sort(key=lambda r: -r["value"])
     return out[:150]
+
+
+# ---------------------------------------------------------------- 無漲跌幅限制
+NOLIM = {}     # code -> {"name", "up", "ref"}；漲停價 9999.95 / 9995 代表沒有漲跌幅限制
+
+
+def load_nolimit(d):
+    c = load_cache("nlm", d)
+    if c:
+        return c
+    out = {}
+    for r in fetch_list("https://openapi.twse.com.tw/v1/exchangeReport/TWT84U"):
+        code, up, ref = (r.get("Code") or "").strip(), num(r.get("TodayLimitUp")), num(r.get("TodayOpeningRefPrice"))
+        if is_stock_code(code) and up and ref and up / ref > 1.25:
+            out[code] = {"name": r.get("Name", "").strip(), "up": up, "ref": ref}
+    for r in fetch_list("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes"):
+        code, up, ref = (r.get("SecuritiesCompanyCode") or "").strip(), num(r.get("NextLimitUp")), num(r.get("NextReferencePrice") or r.get("Close"))
+        if is_stock_code(code) and up and ref and up / ref > 1.25:
+            out[code] = {"name": r.get("CompanyName", "").strip(), "up": up, "ref": ref}
+    if out:
+        save_cache("nlm", d, out)
+    return out
+
+
+def nolimit_reason(code, days):
+    st = sec_type(code)
+    if st == "股票" and days is not None and days <= 5:
+        return "新股", "剛上市 / 上櫃，前 5 個交易日沒有漲跌幅限制"
+    if st == "ETF" and code.endswith("B"):
+        return "債券ETF", "債券型 ETF 沒有漲跌幅限制"
+    if st in ("ETF", "ETN"):
+        return "海外" + st, "追蹤國外市場或商品，沒有漲跌幅限制，價格跟著國外走"
+    return "其他", "暫停交易後恢復、或其他原因，暫時沒有漲跌幅限制"
+
+
+def new_stock_plan(code, n):
+    """新股（歷史很短）：用上市以來的高低點判斷能不能進場"""
+    s = HIST[code]
+    c, lo, hi = s["c"][-1], min(s["l"]), max(s["h"])
+    first = s["o"][0]
+    vol_down = len(s["v"]) >= 2 and s["v"][-1] < s["v"][-2] * 0.7
+    chg = (c / s["c"][-2] - 1) * 100 if len(s["c"]) >= 2 else (c / first - 1) * 100
+    gain = (c / first - 1) * 100
+    stop = rnd(max(lo * 0.97, c * 0.88), "down")
+    t1, t2 = rnd(c * 1.1, "up"), rnd(max(hi, c * 1.2), "up")
+    left = max(5 - n, 0)
+    if gain > 60:
+        act, ac = "漲幅已大，不建議進場", "down"
+    elif c < first * 0.9 and chg < 0:
+        act, ac = "破底下跌中，先觀望", "down"
+    elif vol_down and c >= lo * 1.03 and chg > -3:
+        act, ac = "量縮止穩，可小量短打", "up"
+    else:
+        act, ac = "波動太大，等量縮止穩再看", ""
+    return {"act": act, "ac": ac, "entry": f"回到 {rnd(max(lo, c * 0.95), 'down')} 附近、成交量變小且不再破底時，少量買進",
+            "stop": stop, "t1": t1, "t2": t2, "first": first, "lo": lo, "hi": hi, "gain": round(gain, 1), "days": n, "left": left,
+            "exit": (f"還剩 {left} 天就恢復漲跌幅限制，" if left else "") + "到目標一先賣一半；碰停損立刻賣；出現爆量長黑（大量下跌）也要先出場",
+            "chg": round(chg, 2), "close": c}
+
+
+def nolimit_list(all_a, last_date):
+    ds = last_date.strftime("%Y-%m-%d")
+    first_day = min((h["dates"][0] for h in HIST.values() if h["dates"]), default=None)
+    out = []
+    for code, v in NOLIM.items():
+        s = HIST.get(code)
+        if not s and sec_type(code) == "股票":    # 下一個交易日才第一天上市
+            out.append({"code": code, "name": v["name"], "kind": "新股", "why": "下一個交易日第一天掛牌，前 5 天沒有漲跌幅限制", "close": v["ref"],
+                        "vol": 0, "chg_pct": None, "upcoming": True, "in_detail": False})
+            continue
+        if not s or s["dates"][-1] != ds:
+            continue
+        n = len(s["dates"]) if first_day and s["dates"][0] > first_day else None
+        kind, why = nolimit_reason(code, n)
+        o = {"code": code, "name": s["name"], "market": s["market"], "kind": kind, "why": why, "close": s["c"][-1], "vol": s["v"][-1],
+             "up": v["up"], "in_detail": code in all_a and len(s["c"]) >= 30}
+        a = all_a.get(code)
+        if kind == "新股" or not a:
+            if len(s["c"]) < 1:
+                continue
+            o["np"] = new_stock_plan(code, len(s["c"]))
+            o["chg_pct"] = o["np"]["chg"]
+        else:
+            if (a["vma20"] or 0) < 50 and kind != "其他":
+                continue
+            p = generic_plan(a)
+            o.update(chg_pct=a["chg_pct"], plan=p, ret20=a.get("ret20"))
+            if p["trend"] == "多頭" and (a["rsi"] or 50) < 75:
+                o["act"], o["ac"] = "可分批買進", "up"
+            elif p["trend"] == "多頭":
+                o["act"], o["ac"] = "偏多但過熱，等拉回", ""
+            elif p["trend"] == "空頭":
+                o["act"], o["ac"] = "趨勢偏弱，先觀望", "down"
+            else:
+                o["act"], o["ac"] = "盤整，靠近進場區再買", ""
+            o["exit"] = ("國外市場晚上大跌，隔天早上可能直接跳空，" if kind.startswith("海外") else "") + \
+                        f"到目標一 {p['t1']} 先賣一半、目標二 {p['t2']} 全賣；收盤跌破停損 {p['stop']} 就出場"
+        out.append(o)
+    order = {"新股": 0, "其他": 1, "海外ETF": 2, "海外ETN": 3, "債券ETF": 4}
+    out.sort(key=lambda o: (order.get(o["kind"], 9), -(o["vol"] * o["close"])))
+    return out
 
 
 def daytrade_info(a):
@@ -2331,7 +2437,7 @@ function toggleWatch(c){let w=getWatch();const on=!w.includes(c);w=on?[...w,c]:w
 
 function render(){
   overview();
-  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['etf','🏦 ETF 買賣'],['divs','💰 配息股'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
+  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['etf','🏦 ETF 買賣'],['divs','💰 配息股'],['nolimit','🚀 無漲跌幅'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
   $('#tabs').innerHTML=tabsHTML(tabs);
   if($('#newsslot'))$('#newsslot').innerHTML=newsPanel();
   if(TAB==='etf')setTimeout(fillEtf);if(TAB==='divs')setTimeout(fillDiv);
@@ -2366,6 +2472,11 @@ function render(){
     <select onchange="DS=this.value;fillDiv()">${[['score','值得買程度'],['yld','殖利率高到低'],['fill','填息率高到低'],['next','即將除息']].map(o=>`<option value="${o[0]}" ${o[0]===DS?'selected':''}>${o[1]}</option>`).join('')}</select></div>
     <div class="card tblwrap" id="dlist"></div>
     <div class="mut" style="font-size:12px;margin-top:8px">年化殖利率＝最近幾次配息平均 × 一年配幾次 ÷ 現在股價。填息＝除息後股價漲回除息前的價格；沒填息代表領到的股息被股價下跌吃掉。以上依過去紀錄計算，未來配息可能改變。</div>`}
+  else if(TAB==='nolimit'){const L=R.nolimit||[],cnt=k=>L.filter(r=>r.kind===k).length;
+    h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 沒有漲跌幅限制的股票，一天可能漲或跌超過 10%（甚至 30%、50%），風險比一般股票大很多，一定要設停損、只用小錢。</div>
+    <p class="sub">一般台股一天最多漲跌 10%，但下面這些沒有限制：剛上市櫃前 5 天的新股、追蹤國外市場的 ETF / ETN、債券 ETF，以及暫停後恢復交易的股票。</p>
+    <div class="chips">${['','新股','其他','海外ETF','海外ETN','債券ETF'].map(k=>`<button class="tab ${NK===k?'on':''}" onclick="NK='${k}';render()">${k||'全部'}（${k?cnt(k):L.length}）</button>`).join('')}</div>
+    <div class="stocks">${L.filter(r=>!NK||r.kind===NK).slice(0,150).map(nlCard).join('')||'<div class=mut>今天沒有這一類的股票</div>'}</div>`}
   else if(TAB==='all'){const inds=[...new Set(R.all.map(r=>r[3]).filter(Boolean))].sort();
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
     <div class="filters"><input id="fq" placeholder="搜尋代號或名稱" value="${AQ}" oninput="AQ=this.value.trim();AN=100;fillAll()">
@@ -2384,6 +2495,25 @@ function render(){
 }
 function tabsHTML(tabs){return tabs.map(t=>`<button class="tab ${TAB===t[0]?'on':''}" onclick="TAB='${t[0]}';$('#panel').innerHTML='';render()">${t[1]}</button>`).join('')}
 let AQ='',AI='',AS='chg',AN=100,AV='',AGR='';
+let NK='';
+function nlCard(r){
+  const Lv=LIVE[r.code],p=Lv&&Lv.price?Lv.price:r.close,c=Lv&&Lv.chg_pct!=null?Lv.chg_pct:r.chg_pct,n=r.np,pl=r.plan;
+  const head=`<div class="top"><div><span class="nm">${r.name}</span><span class="cd">${r.code}・${r.kind}</span>
+    <div class="mut" style="font-size:12px;margin-top:2px">${r.why}</div>
+    ${r.upcoming?'<div style="margin-top:4px"><b>第一天不建議追，先看開盤後走勢</b></div>':`<div style="margin-top:4px"><b class="${(n||r).ac}">${(n||r).act}</b></div>`}</div>
+    <div class="price"><div class="p ${cls(c)}">${f(p)}</div>${c!=null?`<div class="${cls(c)}">${sg(c)}${f(c)}%</div>`:'<div class="mut" style="font-size:12px">參考價</div>'}</div></div>`;
+  let body='';
+  if(r.upcoming)body=`<div style="font-size:13px;line-height:1.7">🕘 <b>何時進場：</b>前 1～2 天波動最大，等成交量變小、股價不再創新低時再考慮<br>🕐 <b>何時出場：</b>買進後跌破買價 10% 一定要停損；第 5 天收盤後恢復漲跌幅限制</div>`;
+  else if(n)body=`<div class="plan"><div><small>止穩進場</small><b class="up">${f(n.lo)}~${f(Math.min(n.close,n.hi))}</b></div><div><small>停損</small><b class="down">${f(n.stop)}</b></div>
+      <div><small>目標一</small><b>${f(n.t1)}</b></div><div><small>目標二</small><b>${f(n.t2)}</b></div></div>
+    <div style="font-size:13px;line-height:1.7">🕘 <b>何時進場：</b>${n.entry}<br>🕐 <b>何時出場：</b>${n.exit}</div>
+    <div class="mut" style="font-size:12px">已交易 ${n.days} 天｜首日開盤 ${f(n.first)}｜至今 ${sg(n.gain)}${f(n.gain,1)}%｜最低 ${f(n.lo)}、最高 ${f(n.hi)}</div>`;
+  else if(pl)body=`<div class="plan"><div><small>建議進場</small><b class="up">${f(pl.entry_lo)}~${f(pl.entry_hi)}</b></div><div><small>停損 (${pl.stop_pct}%)</small><b class="down">${f(pl.stop)}</b></div>
+      <div><small>目標一 (+${pl.t1_pct}%)</small><b>${f(pl.t1)}</b></div><div><small>目標二</small><b>${f(pl.t2)}</b></div></div>
+    <div style="font-size:13px;line-height:1.7">🕐 <b>何時出場：</b>${r.exit}</div>
+    <div class="mut" style="font-size:12px">趨勢 ${pl.trend}｜風報比 ${pl.rr??'-'}｜20日 ${r.ret20!=null?sg(r.ret20)+f(r.ret20,1)+'%':'-'}</div>${pl.note?`<div class="mut" style="font-size:12px">${pl.note}</div>`:''}`;
+  return `<div class="st ${r.in_detail?'click':''}" ${r.in_detail?`onclick="lookup('${r.code}')"`:''}>${head}${body}</div>`
+}
 let EQ='',EK='',EF='',DF='月配',DQ='',DM='',DT='',DS='score';
 const vc=v=>({'值得買':'ok','可以考慮':'ok','普通':'warn','不建議只為配息買':'bad','不適合領息':'bad'})[v]||'';
 function fillEtf(){const el=$('#elist');if(!el)return;
@@ -2517,6 +2647,7 @@ function peerSection(d){
       <td><span class="vtag ${r[8]||''}">${r[7]}</span></td><td>${r[13]!=null?f(r[13],0):'-'}</td><td>${r[9]!=null?f(r[9],1):'-'}</td><td>${r[10]!=null?f(r[10])+'%':'-'}</td>
       <td class="${cls(r[11])}">${r[11]!=null?f(r[11],1)+'%':'-'}</td><td>${r[12]!=null?f(r[12],1)+'%':'-'}</td><td class="${cls(r[14])}">${r[14]!=null?f(r[14],1)+'%':'-'}</td></tr>`).join('')}</table></div></div>`
 }
+function nolimSection(d){return d.nolim?`<div class="status down" style="margin:8px 0;color:var(--bad)">🚀 無漲跌幅限制：${d.nolim}。一天可能漲跌超過 10%，請嚴設停損。</div>`:''}
 function divSection(d){
   const v=d.dv;if(!v)return'';const ic={ok:'✓',bad:'✗',warn:'!'};
   if(!v.events.length)return `<div class="sec"><h3>配息分析</h3><div><span class="vtag ${vc(v.verdict)}">${v.verdict}</span></div><ul class="checks">${v.why.map(c=>`<li><b class="c-${c[0]}">${ic[c[0]]}</b><span>${c[1]}</span></li>`).join('')}</ul>${v.next?`<div>下次除息 ${v.next.date}${v.next.cash?'，'+v.next.cash+' 元':''}</div>`:''}</div>`;
@@ -2595,7 +2726,7 @@ function detailHTML(d){
     <div class="summary">${E.summary}</div>${cardPanel(d)}${verdictPanel(d)}</div>
   <div class="sec"><h3>K 線圖（近 60 日）</h3>${kchart(d)}</div>
   ${liveSecHTML(d)}
-  ${divSection(d)}${dtSection(d)}
+  ${nolimSection(d)}${divSection(d)}${dtSection(d)}
   ${stockCard(d)}
   ${(d.news&&d.news.length)?`<div class="sec"><h3>近期新聞</h3><div class="news">${newsItems(d.news)}</div></div>`:''}
   <div class="sec"><h3>分析師觀點</h3>
