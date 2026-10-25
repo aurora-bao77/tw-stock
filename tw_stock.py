@@ -123,9 +123,30 @@ def is_etf(code):
     return code.startswith("00") and 4 <= len(code) <= 6 and code[:4].isdigit() and code.isalnum()
 
 
+def sec_type(code):
+    """證券種類：股票 / ETF / 特別股 / ETN / REIT / TDR（權證、牛熊證不收）"""
+    import re
+    if is_etf(code):
+        return "ETF"
+    if re.fullmatch(r"\d{4}", code):
+        return "股票"
+    if re.fullmatch(r"\d{4}[A-Z]\d?", code):
+        return "特別股"
+    if re.fullmatch(r"02\d{4}", code):
+        return "ETN"
+    if re.fullmatch(r"01\d{3}T", code):
+        return "REIT"
+    if re.fullmatch(r"91\d{4}", code):
+        return "TDR"
+    return None
+
+
+def is_nonstock(code):
+    return sec_type(code) not in ("股票", None)
+
+
 def is_stock_code(code):
-    # 一般股票 (4 碼數字) 或 ETF；不含權證、ETN
-    return (len(code) == 4 and code.isdigit() and not code.startswith("00")) or is_etf(code)
+    return sec_type(code) is not None
 
 
 def fetch_twse_quotes(d):
@@ -246,13 +267,13 @@ def update_data():
     for d in dates:
         if len(trading) >= HISTORY_DAYS:
             break
-        tw = get_day("twse2", fetch_twse_quotes, d)
+        tw = get_day("twse3", fetch_twse_quotes, d)
         if tw is None:   # 多半是請求太頻繁被暫時擋下，稍等再試一次
             time.sleep(15)
-            tw = get_day("twse2", fetch_twse_quotes, d)
+            tw = get_day("twse3", fetch_twse_quotes, d)
         if tw is None or tw.get("holiday"):
             continue
-        trading.append((d, tw, pool.submit(get_day, "tpex2", fetch_tpex_quotes, d)))
+        trading.append((d, tw, pool.submit(get_day, "tpex3", fetch_tpex_quotes, d)))
         STATUS["progress"] = int(len(trading) / HISTORY_DAYS * 75)
         STATUS["msg"] = f"行情資料 {len(trading)}/{HISTORY_DAYS} 天 (目前: {d:%Y-%m-%d})"
     STATUS["msg"] = "等待上櫃行情下載完成…"
@@ -286,10 +307,10 @@ def update_data():
     log("下載三大法人買賣超…")
     inst = {}
     days = [d for d, _, _ in trading[-INST_DAYS:]]
-    futs = [(d, pool.submit(get_day, "tpinst2", fetch_tpex_inst, d)) for d in days]
+    futs = [(d, pool.submit(get_day, "tpinst3", fetch_tpex_inst, d)) for d in days]
     tw_inst = []
     for i, d in enumerate(days):
-        tw_inst.append((d, get_day("twinst2", fetch_twse_inst, d)))
+        tw_inst.append((d, get_day("twinst3", fetch_twse_inst, d)))
         STATUS["progress"] = 80 + int((i + 1) / len(days) * 15)
     for d, r in tw_inst + [(d, f.result()) for d, f in futs]:
         if r and r.get("inst"):
@@ -486,7 +507,7 @@ def analyze(code):
 
 
 def liquid(a):
-    return a and not is_etf(a["code"]) and a["days"] >= 60 and a["close"] >= 10 and (a["vma20"] or 0) >= 800 and a["vol"] >= 300
+    return a and not is_nonstock(a["code"]) and a["days"] >= 60 and a["close"] >= 10 and (a["vma20"] or 0) >= 800 and a["vol"] >= 300
 
 
 def score_momentum(a):
@@ -732,10 +753,10 @@ def build_report(taiex, last_date):
 
     up = sum(1 for a in latest if a["chg"] > 0)
     down = sum(1 for a in latest if a["chg"] < 0)
-    tradable = [a for a in latest if a["vol"] >= 500 and not is_etf(a["code"])]
+    tradable = [a for a in latest if a["vol"] >= 500 and not is_nonstock(a["code"])]
     gainers = sorted(tradable, key=lambda a: -a["chg_pct"])[:10]
     losers = sorted(tradable, key=lambda a: a["chg_pct"])[:10]
-    by_value = sorted([a for a in latest if not is_etf(a["code"])], key=lambda a: -(a["vol"] * a["close"]))[:10]
+    by_value = sorted([a for a in latest if not is_nonstock(a["code"])], key=lambda a: -(a["vol"] * a["close"]))[:10]
     foreign_buy = sorted(latest, key=lambda a: -a["f5"])[:10]
 
     # 大盤多空判斷
@@ -773,7 +794,7 @@ def build_report(taiex, last_date):
         "by_value": [simple(a) for a in by_value],
         "foreign_buy": [simple(a) for a in foreign_buy],
         "daytrade": daytrade_list(latest),
-        "all": [[a["code"], a["name"], a["market"], "ETF" if is_etf(a["code"]) else (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
+        "all": [[a["code"], a["name"], a["market"], sec_type(a["code"]) if is_nonstock(a["code"]) else (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
                  a["chg_pct"], a["vol"], sv_of(a)["verdict"], sv_of(a)["vc"]] + sv_of(a)["row"]
                 for a in sorted(latest, key=lambda x: x["code"])],
     }
@@ -930,7 +951,7 @@ def fundamentals(a):
     p = PROFILE.get(code, {})
     pe, yld, pb = FUND.get(code, (None, None, None))
     e = p.get("eps") or {}
-    f = {"ind": "ETF" if is_etf(code) else (p.get("ind") or ""), "pe": pe, "pb": pb, "ind_pe": IND_PE.get(p.get("ind") or "")}
+    f = {"ind": sec_type(code) if is_nonstock(code) else (p.get("ind") or ""), "pe": pe, "pb": pb, "ind_pe": IND_PE.get(p.get("ind") or "")}
     if pe and pe > 0:
         f["eps_ttm"] = round(c / pe, 2)
     if e.get("eps") is not None and e.get("q"):
@@ -1042,12 +1063,15 @@ def analyst_report(a, f, plan):
                 "中立": "多空因素交錯，建議區間操作或等待更明確訊號。", "觀望 / 減碼": "目前風險大於機會，建議暫時觀望，持有者控管部位。"}[rating]
     if target:
         summary += f" 以全年化 EPS {f['eps_base']:.2f} 元 × 合理本益比估算，合理價約 {target}（{'+' if upside >= 0 else ''}{upside}%）。"
-    if is_etf(a["code"]):
+    if is_nonstock(a["code"]):
         rating, rc = {"多頭": ("逢低布局", "up"), "空頭": ("觀望 / 減碼", "down")}.get(plan["trend"], ("中立", ""))
         lev = a["code"].endswith(("L", "R"))
-        summary = (f"{a['name']}是 ETF（{'槓桿 / 反向型，只適合短線' if lev else '一次買進一籃子股票'}），沒有單一公司的財報。"
+        t = sec_type(a["code"])
+        desc = {"ETF": "槓桿 / 反向型，只適合短線" if lev else "一次買進一籃子股票", "特別股": "特別股，通常有固定股息、價格波動小", "ETN": "券商發行的指數投資證券，有到期日與信用風險",
+                "REIT": "不動產投資信託，收益來自租金", "TDR": "外國公司在台灣發行的存託憑證"}.get(t, t)
+        summary = (f"{a['name']}是{t}（{desc}），沒有一般公司的完整財報分析。"
                    f"目前趨勢「{plan['trend']}」，" + {"逢低布局": "可在支撐附近分批買進。", "觀望 / 減碼": "建議等站回月線再考慮。", "中立": "可以定期定額或區間操作。"}[rating])
-        fund_pts = ["ETF 沒有公司財報，主要看追蹤的指數、配息與折溢價"]
+        fund_pts = [f"{t}沒有一般公司的財報評分，主要看價格趨勢、配息與成交量"]
         target, upside = None, None
         risks = ["槓桿 / 反向 ETF 長期持有會有耗損"] if lev else risks
     return {"rating": rating, "rc": rc, "points": pts, "target": target, "upside": upside, "summary": summary,
@@ -1086,7 +1110,8 @@ def stock_detail(code):
     o["fh"] = fh = fin_health(code, a)
     o["pat"] = pat = price_patterns(code, a)
     o["card"] = scorecard(a, f, fh, o["chip2"], sv, pat)
-    o["etf"] = is_etf(code)
+    o["etf"] = is_nonstock(code)
+    o["stype"] = sec_type(code)
     o["dt"] = daytrade_info(a)
     s = HIST[code]
     k = min(60, len(s["c"]))
@@ -1138,7 +1163,7 @@ def fetch_tdcc():
 
 
 def load_risk(d):
-    c = load_cache("risk2", d)
+    c = load_cache("risk3", d)
     if c:
         return c
     tw, tp = "https://openapi.twse.com.tw/v1/", "https://www.tpex.org.tw/openapi/v1/"
@@ -1201,7 +1226,7 @@ def load_risk(d):
         tdcc = {"date": None, "data": {}}
     c = {"dt": dt, "mg": mg, "flags": flags, "tv": tv, "tdcc": tdcc}
     if mg:
-        save_cache("risk2", d, c)
+        save_cache("risk3", d, c)
     return c
 
 
@@ -1213,7 +1238,7 @@ def build_hist2(prev):
     for code, rows in (prev or {}).get("tdcc", {}).items():
         tdh[code] = {r[0]: r[1] for r in rows}
     for fn in sorted(os.listdir(DATA_DIR)):
-        if not (fn.endswith("_risk.json") or fn.endswith("_risk2.json")):
+        if not (fn.endswith("_risk.json") or fn.endswith("_risk2.json") or fn.endswith("_risk3.json")):
             continue
         try:
             with open(os.path.join(DATA_DIR, fn), encoding="utf-8") as fh:
@@ -1274,13 +1299,14 @@ def themes_for(code):
 
 def strength_vs_hype(a, f, ch):
     """判斷是真有實力，還是人為炒作 / 題材炒作"""
-    if is_etf(a["code"]):
-        checks = [["ok", "ETF 一次買進一籃子股票，風險分散，不易被單一主力炒作"]]
+    if is_nonstock(a["code"]):
+        t = sec_type(a["code"])
+        checks = [["ok", "ETF 一次買進一籃子股票，風險分散，不易被單一主力炒作"]] if t == "ETF" else [["ok", f"這是{t}，不是一般普通股，請注意它的特性"]]
         if a["code"].endswith(("L", "R")):
             checks.append(["warn", "這是槓桿或反向型 ETF，只適合短線，長期持有會有耗損"])
         if (ch.get("daytrade") or 0) >= 35:
             checks.append(["warn", f"當沖比 {ch['daytrade']}% 偏高"])
-        return {"strength": None, "hype": 0, "hype_lv": "低", "verdict": "ETF", "vc": "", "checks": checks}
+        return {"strength": None, "hype": 0, "hype_lv": "低", "verdict": t, "vc": "", "checks": checks}
     st, hy, checks = 0, 0, []
     ok = lambda t: checks.append(["ok", t])
     bad = lambda t: checks.append(["bad", t])
@@ -1440,7 +1466,7 @@ def daytrade_list(latest):
     for _, a, d in rows[:20]:
         trend = "偏多" if a["close"] > a["ma5"] > a["ma20"] else "偏空" if a["close"] < a["ma5"] < a["ma20"] else "震盪"
         out.append({"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
-                    "etf": is_etf(a["code"]), "trend": trend, **d})
+                    "etf": is_nonstock(a["code"]), "trend": trend, **d})
     return out
 
 
@@ -1661,7 +1687,7 @@ def grade(x):
 
 def scorecard(a, f, fh, ch, sv, pat):
     """分析師評分卡: 8 個面向 0~100 分（ETF 只看技術面、籌碼、股利）"""
-    if is_etf(a["code"]):
+    if is_nonstock(a["code"]):
         clamp = lambda x: max(0, min(100, round(x)))
         inst = a["f10"] + a["t10"]
         tech = clamp(50 + (20 if a["close"] > a["ma20"] else -20) + (10 if a.get("ma60") and a["close"] > a["ma60"] else -10) + (pat.get("rs") or 0) * 0.8)
@@ -2116,7 +2142,7 @@ function render(){
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
     <div class="filters"><input id="fq" placeholder="搜尋代號或名稱" value="${AQ}" oninput="AQ=this.value.trim();AN=100;fillAll()">
     <select id="fi" onchange="AI=this.value;AN=100;fillAll()"><option value="">全部產業</option>${inds.map(i=>`<option ${i===AI?'selected':''}>${i}</option>`).join('')}</select>
-    <select id="fv" onchange="AV=this.value;AN=100;fillAll()">${['','實力股','有實力但短線過熱','中性觀察','題材投機','疑似炒作','體質偏弱'].map(v=>`<option value="${v}" ${v===AV?'selected':''}>${v||'全部鑑定'}</option>`).join('')}</select>
+    <select id="fv" onchange="AV=this.value;AN=100;fillAll()">${['','實力股','有實力但短線過熱','中性觀察','題材投機','疑似炒作','體質偏弱','ETF','特別股','ETN','REIT','TDR'].map(v=>`<option value="${v}" ${v===AV?'selected':''}>${v||'全部鑑定'}</option>`).join('')}</select>
     <select id="fg" onchange="AGR=this.value;AN=100;fillAll()">${['','A','B','C','D','E'].map(v=>`<option value="${v}" ${v===AGR?'selected':''}>${v?'總評 '+v:'全部總評'}</option>`).join('')}</select>
     <select id="fs" onchange="AS=this.value;fillAll()">${SORTS.map(o=>`<option value="${o[0]}" ${o[0]===AS?'selected':''}>${o[1]}</option>`).join('')}</select></div>
     <div class="card tblwrap" id="alist"></div>`}
@@ -2296,7 +2322,7 @@ function detailHTML(d){
   ${patSection(d)}
   ${chipSection(d)}
   ${d.etf?'':insiderSection(d)+finSection(d)+eventSection(d)+peerSection(d)}
-  ${d.etf?`<div class="sec"><h3>ETF 說明</h3><p style="font-size:13.5px;line-height:1.8">ETF 是「一籃子股票」：買一張就等於同時買了很多家公司，所以沒有單一公司的財報和 EPS。挑 ETF 主要看：追蹤什麼指數、內扣費用、配息和是否有溢價。${/[LR]$/.test(d.code)?'<br><b class="down">這是槓桿或反向型 ETF</b>，每天會重新平衡，長期持有會有耗損，只適合短線。':''}</p></div>`:`<div class="sec"><h3>公司資料</h3>${kv([['公司全名',P.full||'-'],['產業',F.ind||'-'],['董事長',P.chair||'-'],['總經理',P.gm||'-'],
+  ${d.etf?`<div class="sec"><h3>${d.stype||'ETF'} 說明</h3><p style="font-size:13.5px;line-height:1.8">${({'ETF':'ETF 是「一籃子股票」：買一張就等於同時買了很多家公司，所以沒有單一公司的財報和 EPS。挑 ETF 主要看：追蹤什麼指數、內扣費用、配息和是否有溢價。','特別股':'特別股通常每年發固定股息，價格波動比普通股小，但沒有投票權，公司可能在幾年後收回。','ETN':'ETN 是券商發行、追蹤某個指數的商品，有到期日，也要承擔發行券商的信用風險。','REIT':'REIT（不動產投資信託）把大樓租金收入分給投資人，配息穩定，但會受利率和房市影響。','TDR':'TDR 是外國公司在台灣上市的存託憑證，股價會受原本國家股價與匯率影響。'})[d.stype]||''}${/^00.*[LR]$/.test(d.code)?'<br><b class="down">這是槓桿或反向型 ETF</b>，每天會重新平衡，長期持有會有耗損，只適合短線。':''}</p></div>`:`<div class="sec"><h3>公司資料</h3>${kv([['公司全名',P.full||'-'],['產業',F.ind||'-'],['董事長',P.chair||'-'],['總經理',P.gm||'-'],
     ['成立日期',P.found||'-'],['上市櫃日期',P.listed||'-'],['資本額',P.cap?f(P.cap)+' 億':'-'],['發行股數',P.shares?f(P.shares)+' 億股':'-'],
     ['英文簡稱',P.en||'-']])}${P.web?`<div style="margin-top:8px;font-size:12px">公司網站：<a href="${P.web}" target="_blank" rel="noopener" style="color:var(--blue)">${P.web}</a></div>`:''}</div>
   <div class="sec"><h3>獲利與評價</h3>${kv([
@@ -2699,7 +2725,7 @@ def build_daily_lesson():
                       "quiz": {"q": f"像{a['name']}這樣被列為注意或處置、又沒有業績支撐的股票，新手應該？", "o": ["趕快追進去", "先不要追，風險很高", "借錢買", "全部押下去"], "a": 1,
                                "e": "交易所會把交易異常的股票列為注意股或處置股，新手最好避開。"}})
     # 3. 大型股跌破月線
-    big = sorted([a for a in latest.values() if not is_etf(a["code"]) and a["chg_pct"] <= -2 and a["ma20"] and a["close"] < a["ma20"] <= a["prev"] * 1.05],
+    big = sorted([a for a in latest.values() if not is_nonstock(a["code"]) and a["chg_pct"] <= -2 and a["ma20"] and a["close"] < a["ma20"] <= a["prev"] * 1.05],
                  key=lambda a: -(a["vma20"] or 0) * a["close"])
     if big:
         a = big[0]
