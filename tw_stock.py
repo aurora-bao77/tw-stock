@@ -2327,6 +2327,62 @@ async function api(path){
   return{};
 }
 const WATCH_KEY='tw_watch';
+function getHold(){try{return JSON.parse(localStorage.getItem('tw_hold')||'{}')}catch(e){return{}}}
+function setHold(h){try{localStorage.setItem('tw_hold',JSON.stringify(h))}catch(e){}}
+function getBudget(){try{return +localStorage.getItem('tw_budget')||100000}catch(e){return 100000}}
+function setBudget(v){try{localStorage.setItem('tw_budget',Math.max(0,+v||0))}catch(e){}render()}
+const isFundLike=c=>/^0/.test(c);
+// 交易成本：手續費 0.1425%（買賣各一次），證交稅股票 0.3%、ETF 0.1%
+function netPL(code,cost,qty,price){const buy=cost*qty*(1+0.001425),sell=price*qty*(1-0.001425-(isFundLike(code)?0.001:0.003));return{buy,sell,pl:sell-buy,pct:(sell/buy-1)*100}}
+function myStop(d,h){const pl=d.plan,L=LIVE[d.code],px=L&&L.price?L.price:d.close;
+  // 空頭時的計畫停損是給「站回月線才買」用的，持股改用近 20 日低點
+  const base=pl.trend==='空頭'&&px<pl.entry_lo?Math.min(pl.stop,Math.round((d.low20||px)*0.98*100)/100):pl.stop;
+  return px>=h.price*1.1?Math.max(base,h.price):Math.max(base,Math.round(h.price*0.92*100)/100)}
+function longTarget(d){const t=d.rep&&d.rep.target;if(t&&t>d.close)return{v:t,src:'依 EPS × 合理本益比估算的合理價'};
+  const hi=d.high60||d.plan.t2;const v=Math.max(hi,d.plan.t2)*1.1;return{v:Math.round(v*100)/100,src:'60 日高點突破後的下一個壓力（技術面估算）'}}
+function buyAdvice(d,price){const pl=d.plan,rt=(d.rep||{}).rating,v=(d.sv||{}).verdict;
+  if(v==='疑似炒作')return['先不要買','down','炒作風險高，股價可能被短線資金拉抬'];
+  if(pl.trend==='空頭')return['等待','',`趨勢偏弱，等站回月線 ${f(d.ma20)} 再考慮`];
+  if(price<pl.stop)return['先不要買','down',`已跌破支撐 ${f(pl.stop)}，等止跌再看`];
+  if(price>pl.entry_hi*1.02)return['等拉回再買','',`現在比建議區高，等回到 ${f(pl.entry_lo)}~${f(pl.entry_hi)} 再買`];
+  if(rt==='觀望 / 減碼')return['等待','','分析師評等偏保守，可以小量試單或等訊號'];
+  return['可以買進','up',`價格在建議區 ${f(pl.entry_lo)}~${f(pl.entry_hi)} 附近，可分 2～3 次買`]}
+function suggestQty(d,price){const B=getBudget(),pl=d.plan,mood=(R.market||{}).mood;
+  const cap={'多頭':0.3,'偏多震盪':0.2,'短線轉弱':0.15,'空頭':0.1}[mood]||0.2;
+  const risk=Math.max(price-pl.stop,price*0.02);let q=Math.floor(B*0.02/risk);q=Math.min(q,Math.floor(B*cap/price));
+  return{q:Math.max(q,0),cap}}
+function qtyTxt(q){const z=Math.floor(q/1000),r=q%1000;return (z?z+' 張':'')+(z&&r?' ':'')+(r?r+' 股':'')||'0 股'}
+function holdBox(d){
+  const h=getHold()[d.code],L=LIVE[d.code],price=L&&L.price?L.price:d.close,pl=d.plan,lt=longTarget(d),st=e=>'onclick="event.stopPropagation()"';
+  const tg=`<div class="kv2" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0">
+    <div class="card" style="padding:8px"><small class="mut">短期目標（1～4 週）</small><br><b class="up">${f(pl.t1)}</b> → <b class="up">${f(pl.t2)}</b></div>
+    <div class="card" style="padding:8px"><small class="mut">長期目標（6～12 個月）</small><br><b class="up">${f(lt.v)}</b> <small class="mut">${sg((lt.v/price-1)*100)}${f((lt.v/price-1)*100,1)}%</small></div></div>
+    <div class="mut" style="font-size:11px">長期目標：${lt.src}</div>`;
+  if(!h){const [a,ac,why]=buyAdvice(d,price),sq=suggestQty(d,price),q=ac==='down'?0:sq.q;
+    return `<div class="sec" ${st()} style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>要不要買？</b> <span class="vtag ${ac==='up'?'ok':ac==='down'?'bad':'warn'}">${a}</span>
+      <div style="font-size:13px;margin:4px 0">${why}</div>
+      ${q?`<div style="font-size:13px">💵 建議買 <b>${qtyTxt(q)}</b>，約 <b>${f(q*price,0)}</b> 元（資金 ${f(getBudget(),0)} 元的 ${f(q*price/getBudget()*100,0)}%；跌到停損 ${f(pl.stop)} 最多虧約 ${f(q*(price-pl.stop),0)} 元）</div>
+        <div class="mut" style="font-size:11px">算法：每檔最多虧總資金 2%，單檔不超過資金 ${sq.cap*100}%（依大盤${(R.market||{}).mood||''}調整）</div>`:''}
+      ${tg}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:13px">我已買進：價格 <input id="hp_${d.code}" type="number" step="0.01" value="${price}" style="width:80px">
+        股數 <input id="hq_${d.code}" type="number" value="${q||1000}" style="width:80px"><button class="g" onclick="event.stopPropagation();saveHold('${d.code}')">記錄買進</button></div></div>`}
+  const n=netPL(d.code,h.price,h.qty,price),stop=myStop(d,h);let a,ac,why;
+  if(price<=stop){a='建議停損';ac='bad';why=`現價 ${f(price)} 已跌破停損 ${f(stop)}，建議賣出，保住本金`}
+  else if(price>=pl.t2){a='獲利了結';ac='ok';why=`已到短期第二目標 ${f(pl.t2)}，建議賣出大部分；看好長期可留一點到 ${f(lt.v)}`}
+  else if(price>=pl.t1){a='先賣一半';ac='ok';why=`已到短期第一目標 ${f(pl.t1)}，先賣一半，剩下的停損移到成本 ${f(h.price)}`}
+  else if(pl.trend==='空頭'){a='減碼 / 設好停損';ac='warn';why=`趨勢偏弱，反彈到月線 ${f(d.ma20)} 附近可以減碼，跌破 ${f(stop)} 就停損`}
+  else{a='續抱等待';ac='ok';why=`趨勢沒有轉壞，繼續持有，等漲到 ${f(pl.t1)}；跌破 ${f(stop)} 才停損`}
+  return `<div class="sec" ${st()} style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>我的持股</b> <span class="vtag ${ac}">${a}</span>
+    <div style="font-size:13px;margin:4px 0">${why}</div>
+    <div style="font-size:13px;line-height:1.7">買進 ${f(h.price)} × ${qtyTxt(h.qty)}，成本約 <b>${f(n.buy,0)}</b> 元（${h.date||''}）<br>
+      現在市值約 ${f(price*h.qty,0)} 元，扣手續費和稅後 <b class="${cls(n.pl)}">${sg(n.pl)}${f(n.pl,0)} 元（${sg(n.pct)}${f(n.pct,1)}%）</b><br>
+      🛑 我的停損價 <b class="down">${f(stop)}</b>${price>=h.price*1.1?'（已賺 10% 以上，停損移到成本，保住獲利）':''}</div>
+    ${tg}
+    <div style="margin-top:6px;text-align:right"><button class="g" onclick="event.stopPropagation();delHold('${d.code}')">已賣出 / 清除紀錄</button></div></div>`
+}
+function saveHold(c){const p=+$('#hp_'+c).value,q=Math.round(+$('#hq_'+c).value);if(!(p>0&&q>0)){toast('請輸入買進價格和股數');return}
+  const h=getHold();h[c]={price:p,qty:q,date:new Date().toLocaleDateString('zh-TW')};setHold(h);toast('已記錄，橘橘會幫你盯停損和目標價！');syncNativeWatch();render()}
+function delHold(c){const h=getHold();delete h[c];setHold(h);syncNativeWatch();render()}
 function getWatch(){try{return JSON.parse(localStorage.getItem(WATCH_KEY)||'[]')}catch(e){return[]}}
 function setWatch(w){try{localStorage.setItem(WATCH_KEY,JSON.stringify(w))}catch(e){}}
 const $=s=>document.querySelector(s);
@@ -2375,7 +2431,8 @@ function overview(){
 
 function liveStatus(s){
   const L=LIVE[s.code];if(!L||!L.price)return'';const p=L.price,pl=s.plan;let t,c;
-  if(p<=pl.stop){t='⛔ 已跌破停損價，不宜進場 / 持有者應停損';c='down'}
+  if(pl.trend==='空頭'&&p<pl.entry_lo){t='📉 空頭格局，等站回月線 '+f(pl.entry_lo)+' 再考慮進場';c='down'}
+  else if(p<=pl.stop){t='⛔ 已跌破停損價，不宜進場 / 持有者應停損';c='down'}
   else if(p>=pl.t2){t='🎯 已達第二目標，可獲利出場';c='up'}
   else if(p>=pl.t1){t='🎯 已達第一目標，可分批獲利了結';c='up'}
   else if(p>=pl.entry_lo&&p<=pl.entry_hi){t='✅ 目前價格在建議進場區間內';c='up'}
@@ -2406,7 +2463,7 @@ function stockCard(s){
 
 function svRow(s){
   if(!s.sv)return'';const v=s.sv;
-  return `<div class="sv"><span class="vtag ${v.vc}">${v.verdict}</span><span>實力 <b>${v.strength}</b></span><span>炒作風險 <b class="${v.hype_lv==='高'?'c-bad':v.hype_lv==='中'?'c-warn':''}">${v.hype_lv}</b></span>
+  return `<div class="sv"><span class="vtag ${v.vc}">${v.verdict}</span>${v.strength==null?'':`<span>實力 <b>${v.strength}</b></span>`}<span>炒作風險 <b class="${v.hype_lv==='高'?'c-bad':v.hype_lv==='中'?'c-warn':''}">${v.hype_lv}</b></span>
     ${(s.themes||[]).map(t=>`<span class="theme">${t}</span>`).join('')}</div>`
 }
 const SENT={'正面':'pos','負面':'neg'};
@@ -2427,7 +2484,7 @@ const pctCell=r=>{const L=LIVE[r.code],c=L&&L.chg_pct!=null?L.chg_pct:r.chg_pct;
 const priceCell=r=>{const L=LIVE[r.code];return f(L&&L.price?L.price:r.close)};
 
 let WATCH_DATA={};
-function syncNativeWatch(){if(!NATIVE)return;try{NATIVE.saveWatch(JSON.stringify(getWatch().map(c=>WATCH_DATA[c]).filter(Boolean).map(d=>({code:d.code,name:d.name,market:d.market,...d.plan}))))}catch(e){}}
+function syncNativeWatch(){if(!NATIVE)return;try{NATIVE.saveWatch(JSON.stringify(getWatch().map(c=>WATCH_DATA[c]).filter(Boolean).map(d=>({code:d.code,name:d.name,market:d.market,...planOf(d.code)}))))}catch(e){}}
 async function loadWatch(){
   for(const c of getWatch()){if(!WATCH_DATA[c]){const d=await (await api('/api/stock?code='+c));if(!d.error)WATCH_DATA[c]=d}}
   syncNativeWatch();
@@ -2449,7 +2506,10 @@ function render(){
   else if(TAB==='potential'){h=bear+`<p class="sub">蓄勢待發：剛站上月線、布林收斂、法人默默佈局，尚未大漲。適合分批佈局、中線持有。</p>
     <div class="stocks">${R.potential.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票</div>'}</div>`}
   else if(TAB==='watch'){const w=getWatch();h=`<p class="sub">在上方查詢任一股票並加入自選，會每天自動給出進出場建議。</p>
-    <div class="stocks">${w.map(c=>WATCH_DATA[c]?stockCard(WATCH_DATA[c]):'').join('')||'<div class=mut>尚未加入自選股</div>'}</div>`}
+    <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">💰 我可以投入的資金
+      <input id="budget" type="number" inputmode="numeric" value="${getBudget()}" style="width:130px" onchange="setBudget(this.value)"> 元
+      <span class="mut" style="font-size:12px">（用來算每檔建議買多少）</span></div>
+    <div class="stocks">${w.map(c=>WATCH_DATA[c]?stockCard(WATCH_DATA[c]).replace(/<\/div>$/,holdBox(WATCH_DATA[c])+'</div>'):'').join('')||'<div class=mut>尚未加入自選股</div>'}</div>`}
   else if(TAB==='daytrade'){const L=R.daytrade||[];
     h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 當沖風險非常高：一天內就要買賣完，股價一下跌可能虧很多，還要付手續費和證交稅（當沖證交稅 0.15%）。新手建議先在股票小學堂練習，不要直接上場。</div>
     <p class="sub">可以現股當沖、成交量大、波動夠的股票（已排除處置股）。每檔都列出「幾點、什麼價位進場」、停損、停利和最晚出場時間。價位是用昨天的最高、最低、收盤算出的樞紐點 PP / R1 / R2 / S1 / S2。</p>
@@ -2829,9 +2889,10 @@ async function detailLive(code){
 /* ============================== 買賣點提醒 */
 let DB=null,ALERTS=[];
 const todayKey=()=>new Date().toISOString().slice(0,10);
-function planOf(code){const x=[...R.momentum,...R.potential].find(s=>s.code===code)||WATCH_DATA[code];return x?{name:x.name,...x.plan}:null}
+function planOf(code){const x=WATCH_DATA[code]||[...R.momentum,...R.potential].find(s=>s.code===code);if(!x)return null;const h=getHold()[code],p={name:x.name,...x.plan};if(h)p.stop=myStop(x,h);return p}
 function alertCodes(){return [...new Set([...getWatch(),...R.momentum.map(x=>x.code),...R.potential.map(x=>x.code)])]}
 function judgeLive(code,price){const p=planOf(code);if(!p||!price)return null;
+  if(p.trend==='空頭'&&price<p.entry_lo&&!getHold()[code])return null;
   if(price<=p.stop)return{type:'stop',msg:`${p.name} 跌到 ${f(price)}，跌破停損 ${f(p.stop)}，持有的話該賣出停損`};
   if(price>=p.t2)return{type:'t2',msg:`${p.name} 漲到 ${f(price)}，達到第二目標 ${f(p.t2)}，可以獲利出場`};
   if(price>=p.t1)return{type:'t1',msg:`${p.name} 漲到 ${f(price)}，達到第一目標 ${f(p.t1)}，可以先賣一半`};
