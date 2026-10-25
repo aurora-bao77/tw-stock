@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">台股分析</string>
+    <!-- 免費網站 (GitHub Pages) 的網址 -->
+    <string name="site_url">https://aurora-bao77.github.io/tw-stock/</string>
+</resources>

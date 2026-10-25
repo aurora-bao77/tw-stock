@@ -1,0 +1,8 @@
+tw_stock_data/
+site/
+__pycache__/
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+*.keystore

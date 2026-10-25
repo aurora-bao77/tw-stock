@@ -1,0 +1,24 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'tw.stock.app'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'tw.stock.app'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+    signingConfigs {
+        release {
+            storeFile file(System.getenv('TW_KEYSTORE') ?: 'tw-stock.keystore')
+            storePassword System.getenv('TW_KEYSTORE_PASS') ?: 'twstock123'
+            keyAlias 'twstock'
+            keyPassword System.getenv('TW_KEYSTORE_PASS') ?: 'twstock123'
+        }
+    }
+    buildTypes {
+        release { minifyEnabled false; signingConfig signingConfigs.release }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}

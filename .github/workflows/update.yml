@@ -1,0 +1,51 @@
+name: 每日更新台股分析網站
+
+on:
+  schedule:
+    - cron: "25 8 * * 1-5"         # 台灣時間 16:25 收盤後完整更新
+    - cron: "5,35 1-5 * * 1-5"     # 台灣時間 09:05~13:35 每 30 分鐘更新盤中報價
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 還原歷史資料快取
+        uses: actions/cache@v4
+        with:
+          path: tw_stock_data
+          key: twdata-${{ github.run_id }}
+          restore-keys: twdata-
+      - name: 產生網站與今日時事課
+        run: |
+          mkdir -p site/school
+          python tw_stock.py --rss --site --export site/index.html --lesson site/school/today.json
+          cp icon-192.png icon-512.png manifest.webmanifest sw.js TwStock.apk site/
+          cp school.html site/school/index.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
