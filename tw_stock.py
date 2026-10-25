@@ -2327,7 +2327,11 @@ async function api(path){
   return{};
 }
 const WATCH_KEY='tw_watch';
-function getHold(){try{return JSON.parse(localStorage.getItem('tw_hold')||'{}')}catch(e){return{}}}
+function getHold(){let h={};try{h=JSON.parse(localStorage.getItem('tw_hold')||'{}')}catch(e){}
+  for(const c in h){const x=h[c];if(!x.lots)h[c]={lots:[{price:x.price,qty:x.qty,date:x.date||''}]}}return h}
+// 多筆買進合併：平均成本（不含費用）與含手續費總成本
+function holdInfo(x){if(!x||!x.lots||!x.lots.length)return null;const qty=x.lots.reduce((a,l)=>a+l.qty,0),amt=x.lots.reduce((a,l)=>a+l.price*l.qty,0);
+  return{lots:x.lots,qty,price:Math.round(amt/qty*100)/100,amt,cost:amt*1.001425,date:x.lots[0].date}}
 function setHold(h){try{localStorage.setItem('tw_hold',JSON.stringify(h))}catch(e){}}
 function getBudget(){try{return +localStorage.getItem('tw_budget')||100000}catch(e){return 100000}}
 function setBudget(v){try{localStorage.setItem('tw_budget',Math.max(0,+v||0))}catch(e){}render()}
@@ -2353,7 +2357,7 @@ function suggestQty(d,price){const B=getBudget(),pl=d.plan,mood=(R.market||{}).m
   return{q:Math.max(q,0),cap}}
 function qtyTxt(q){const z=Math.floor(q/1000),r=q%1000;return (z?z+' 張':'')+(z&&r?' ':'')+(r?r+' 股':'')||'0 股'}
 function holdBox(d){
-  const h=getHold()[d.code],L=LIVE[d.code],price=L&&L.price?L.price:d.close,pl=d.plan,lt=longTarget(d),st=e=>'onclick="event.stopPropagation()"';
+  const h=holdInfo(getHold()[d.code]),L=LIVE[d.code],price=L&&L.price?L.price:d.close,pl=d.plan,lt=longTarget(d),st=e=>'onclick="event.stopPropagation()"';
   const tg=`<div class="kv2" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:6px 0">
     <div class="card" style="padding:8px"><small class="mut">短期目標（1～4 週）</small><br><b class="up">${f(pl.t1)}</b> → <b class="up">${f(pl.t2)}</b></div>
     <div class="card" style="padding:8px"><small class="mut">長期目標（6～12 個月）</small><br><b class="up">${f(lt.v)}</b> <small class="mut">${sg((lt.v/price-1)*100)}${f((lt.v/price-1)*100,1)}%</small></div></div>
@@ -2374,14 +2378,33 @@ function holdBox(d){
   else{a='續抱等待';ac='ok';why=`趨勢沒有轉壞，繼續持有，等漲到 ${f(pl.t1)}；跌破 ${f(stop)} 才停損`}
   return `<div class="sec" ${st()} style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>我的持股</b> <span class="vtag ${ac}">${a}</span>
     <div style="font-size:13px;margin:4px 0">${why}</div>
-    <div style="font-size:13px;line-height:1.7">買進 ${f(h.price)} × ${qtyTxt(h.qty)}，成本約 <b>${f(n.buy,0)}</b> 元（${h.date||''}）<br>
+    <div style="font-size:13px;line-height:1.7">共 <b>${qtyTxt(h.qty)}</b>，綜合成本價 <b>${f(h.price)}</b>，投入約 <b>${f(n.buy,0)}</b> 元（含手續費）<br>
       現在市值約 ${f(price*h.qty,0)} 元，扣手續費和稅後 <b class="${cls(n.pl)}">${sg(n.pl)}${f(n.pl,0)} 元（${sg(n.pct)}${f(n.pct,1)}%）</b><br>
       🛑 我的停損價 <b class="down">${f(stop)}</b>${price>=h.price*1.1?'（已賺 10% 以上，停損移到成本，保住獲利）':''}</div>
     ${tg}
-    <div style="margin-top:6px;text-align:right"><button class="g" onclick="event.stopPropagation();delHold('${d.code}')">已賣出 / 清除紀錄</button></div></div>`
+    <details style="margin-top:6px;font-size:13px" ${h.lots.length>1?'open':''}><summary>買進紀錄（${h.lots.length} 筆）</summary><div class="tblwrap"><table><tr><th>日期</th><th>價格</th><th>股數</th><th>金額</th><th></th></tr>
+      ${h.lots.map((l,i)=>`<tr><td>${l.date||'-'}</td><td>${f(l.price)}</td><td>${qtyTxt(l.qty)}</td><td>${f(l.price*l.qty,0)}</td><td><button class="g" style="padding:2px 8px" onclick="event.stopPropagation();delLot('${d.code}',${i})">刪除</button></td></tr>`).join('')}</table></div></details>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:13px">➕ 再買進：價格 <input id="hp_${d.code}" type="number" step="0.01" value="${price}" style="width:80px">
+      股數 <input id="hq_${d.code}" type="number" value="1000" style="width:80px"><button class="g" onclick="event.stopPropagation();saveHold('${d.code}')">加碼記錄</button></div>
+    <div class="mut" style="font-size:12px;margin-top:4px">加碼後：${(()=>{const q2=1000,a2=(h.amt+price*q2)/(h.qty+q2);return `若用現價再買 1 張，綜合成本會變成 ${f(a2)}`})()}</div>
+    <div style="margin-top:6px;text-align:right"><button class="g" onclick="event.stopPropagation();delHold('${d.code}')">已全部賣出 / 清除紀錄</button></div></div>`
 }
 function saveHold(c){const p=+$('#hp_'+c).value,q=Math.round(+$('#hq_'+c).value);if(!(p>0&&q>0)){toast('請輸入買進價格和股數');return}
-  const h=getHold();h[c]={price:p,qty:q,date:new Date().toLocaleDateString('zh-TW')};setHold(h);toast('已記錄，橘橘會幫你盯停損和目標價！');syncNativeWatch();render()}
+  const h=getHold(),add=!!h[c];(h[c]=h[c]||{lots:[]}).lots.push({price:p,qty:q,date:new Date().toLocaleDateString('zh-TW')});setHold(h);
+  const hi=holdInfo(h[c]);toast(add?`已加碼，綜合成本價 ${f(hi.price)}，共 ${qtyTxt(hi.qty)}`:'已記錄，橘橘會幫你盯停損和目標價！');syncNativeWatch();render()}
+function delLot(c,i){const h=getHold();if(!h[c])return;h[c].lots.splice(i,1);if(!h[c].lots.length)delete h[c];setHold(h);syncNativeWatch();render()}
+function holdSummary(){const H=getHold(),B=getBudget();let cost=0,val=0,net=0,n=0;const rows=[];
+  for(const c in H){const h=holdInfo(H[c]);if(!h)continue;const d=WATCH_DATA[c],L=LIVE[c],px=L&&L.price?L.price:d?d.close:h.price,x=netPL(c,h.price,h.qty,px);
+    n++;cost+=x.buy;val+=px*h.qty;net+=x.pl;rows.push([d?d.name:c,c,h,px,x])}
+  if(!n)return'';const pct=net/cost*100;
+  return `<div class="card" style="margin-bottom:10px"><b>📊 我的持股統計</b>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:8px 0"><div><small class="mut">已投入（含手續費）</small><div style="font-size:20px;font-weight:800">${f(cost,0)}</div></div>
+      <div><small class="mut">目前市值</small><div style="font-size:20px;font-weight:800">${f(val,0)}</div></div>
+      <div><small class="mut">扣稅費後損益</small><div style="font-size:20px;font-weight:800" class="${cls(net)}">${sg(net)}${f(net,0)}（${sg(pct)}${f(pct,1)}%）</div></div>
+      <div><small class="mut">資金使用</small><div style="font-size:20px;font-weight:800">${f(cost/B*100,0)}%</div><small class="mut">剩 ${f(Math.max(B-cost,0),0)} 元可用</small></div></div>
+    <div class="tblwrap"><table><tr><th>名稱</th><th>股數</th><th>成本價</th><th>現價</th><th>投入</th><th>損益</th><th>占比</th></tr>
+    ${rows.map(([nm,c,h,px,x])=>`<tr><td>${nm}<br><small class="mut">${c}</small></td><td>${qtyTxt(h.qty)}</td><td>${f(h.price)}</td><td>${f(px)}</td><td>${f(x.buy,0)}</td><td class="${cls(x.pl)}">${sg(x.pl)}${f(x.pl,0)}<br><small>${sg(x.pct)}${f(x.pct,1)}%</small></td><td>${f(x.buy/cost*100,0)}%</td></tr>`).join('')}</table></div>
+    ${cost>B?'<div class="status down" style="margin-top:6px">⚠️ 已投入超過你設定的資金，請注意風險、不要再加碼</div>':''}</div>`}
 function delHold(c){const h=getHold();delete h[c];setHold(h);syncNativeWatch();render()}
 function getWatch(){try{return JSON.parse(localStorage.getItem(WATCH_KEY)||'[]')}catch(e){return[]}}
 function setWatch(w){try{localStorage.setItem(WATCH_KEY,JSON.stringify(w))}catch(e){}}
@@ -2509,6 +2532,7 @@ function render(){
     <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">💰 我可以投入的資金
       <input id="budget" type="number" inputmode="numeric" value="${getBudget()}" style="width:130px" onchange="setBudget(this.value)"> 元
       <span class="mut" style="font-size:12px">（用來算每檔建議買多少）</span></div>
+    ${holdSummary()}
     <div class="stocks">${w.map(c=>WATCH_DATA[c]?stockCard(WATCH_DATA[c]).replace(/<\/div>$/,holdBox(WATCH_DATA[c])+'</div>'):'').join('')||'<div class=mut>尚未加入自選股</div>'}</div>`}
   else if(TAB==='daytrade'){const L=R.daytrade||[];
     h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 當沖風險非常高：一天內就要買賣完，股價一下跌可能虧很多，還要付手續費和證交稅（當沖證交稅 0.15%）。新手建議先在股票小學堂練習，不要直接上場。</div>
@@ -2889,7 +2913,7 @@ async function detailLive(code){
 /* ============================== 買賣點提醒 */
 let DB=null,ALERTS=[];
 const todayKey=()=>new Date().toISOString().slice(0,10);
-function planOf(code){const x=WATCH_DATA[code]||[...R.momentum,...R.potential].find(s=>s.code===code);if(!x)return null;const h=getHold()[code],p={name:x.name,...x.plan};if(h)p.stop=myStop(x,h);return p}
+function planOf(code){const x=WATCH_DATA[code]||[...R.momentum,...R.potential].find(s=>s.code===code);if(!x)return null;const h=holdInfo(getHold()[code]),p={name:x.name,...x.plan};if(h)p.stop=myStop(x,h);return p}
 function alertCodes(){return [...new Set([...getWatch(),...R.momentum.map(x=>x.code),...R.potential.map(x=>x.code)])]}
 function judgeLive(code,price){const p=planOf(code);if(!p||!price)return null;
   if(p.trend==='空頭'&&price<p.entry_lo&&!getHold()[code])return null;
