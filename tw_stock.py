@@ -15,6 +15,7 @@ import gzip
 import json
 import math
 import os
+import re
 import ssl
 import sys
 import threading
@@ -343,8 +344,9 @@ def update_data():
     global RISK, HIST2
     log("下載籌碼結構與注意/處置股資料…")
     RISK = load_risk(trading[-1][0])
-    global DTLIST
+    global DTLIST, DIVH
     DTLIST = load_dtlist(trading[-1][0])
+    DIVH = load_divhist(trading[-1][0])
     global EXTRA, TAIEX_RET20, DATES
     log("下載財報、董監持股質押、外資持股、重大訊息…")
     EXTRA = load_extra(trading[-1][0])
@@ -794,6 +796,8 @@ def build_report(taiex, last_date):
         "by_value": [simple(a) for a in by_value],
         "foreign_buy": [simple(a) for a in foreign_buy],
         "daytrade": daytrade_list(latest),
+        "divs": div_list(latest),
+        "etfs": etf_list(latest),
         "all": [[a["code"], a["name"], a["market"], sec_type(a["code"]) if is_nonstock(a["code"]) else (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
                  a["chg_pct"], a["vol"], sv_of(a)["verdict"], sv_of(a)["vc"]] + sv_of(a)["row"]
                 for a in sorted(latest, key=lambda x: x["code"])],
@@ -895,6 +899,11 @@ def load_profiles():
         P(r["SecuritiesCompanyCode"])["ex"] = {"date": roc_date(r.get("ExRrightsExDividendDate")),
                                                "type": r.get("ExRrightsExDividend"), "cash": num(r.get("CashDividend")),
                                                "stock_ratio": num(r.get("StockDividendRatio"))}
+    for r in fetch_list(tp + "tpex_exright_daily"):   # 已公告、即將除息（含 ETF）
+        code = r.get("SecuritiesCompanyCode")
+        if code and not P(code).get("ex"):
+            P(code)["ex"] = {"date": roc_date(r.get("Date")), "type": r.get("ExRightsDiviend"), "cash": num(r.get("CashDividend")),
+                             "stock_ratio": None}
     prof = {c: p for c, p in prof.items() if is_stock_code(c)}
     if len(prof) > 500:
         save_cache("prof", today, prof)
@@ -1113,6 +1122,7 @@ def stock_detail(code):
     o["etf"] = is_nonstock(code)
     o["stype"] = sec_type(code)
     o["dt"] = daytrade_info(a)
+    o["dv"] = div_analysis(a)
     s = HIST[code]
     k = min(60, len(s["c"]))
     o["ohlc"] = [[s["o"][i], s["h"][i], s["l"][i], s["c"][i], s["v"][i]] for i in range(len(s["c"]) - k, len(s["c"]))]
@@ -1433,6 +1443,182 @@ def load_dtlist(d):
     if out:
         save_cache("dtl", d, out)
     return out
+
+
+# ---------------------------------------------------------------- 配息頻率 / 值不值得買
+DIVH = {}      # code -> [[除息日 YYYY-MM-DD, 現金股利, 除息前收盤, 權/息]]
+FREQ_N = {"月配": 12, "雙月配": 6, "季配": 4, "半年配": 2, "年配": 1}
+
+
+def load_divhist(d):
+    """近 15 個月的除權息紀錄（上市 TWT49U、上櫃 exDailyQ），用來判斷配息頻率與填息"""
+    c = load_cache("dvh", d)
+    if c:
+        return c
+    out = {}
+    st = d - timedelta(days=450)
+    try:
+        js = http_get(f"https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate={st:%Y%m%d}&endDate={d:%Y%m%d}&response=json", timeout=60)
+        for r in js.get("data") or []:
+            m = re.match(r"(\d+)年(\d+)月(\d+)日", r[0])
+            if not m:
+                continue
+            ds = f"{int(m[1]) + 1911}-{m[2]}-{m[3]}"
+            cash = num(r[5]) if "息" in r[6] else 0
+            out.setdefault(r[1].strip(), []).append([ds, round(cash or 0, 4), num(r[3]), r[6]])
+    except Exception as e:
+        print("  ! 上市除權息紀錄失敗", e)
+    try:
+        body = urllib.parse.urlencode({"startDate": f"{st:%Y/%m/%d}", "endDate": f"{d:%Y/%m/%d}", "response": "json"}).encode()
+        req = urllib.request.Request("https://www.tpex.org.tw/www/zh-tw/bulletin/exDailyQ", data=body, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=60, context=SSL_CTX) as r:
+            js = json.loads(r.read().decode("utf-8", "replace"))
+        for r in (js.get("tables") or [{}])[0].get("data") or []:
+            y, mo, da = r[0].split("/")
+            out.setdefault(r[1].strip(), []).append([f"{int(y) + 1911}-{mo}-{da}", round(num(r[13]) or 0, 4), num(r[3]), r[8].replace("除", "")])
+    except Exception as e:
+        print("  ! 上櫃除權息紀錄失敗", e)
+    for v in out.values():
+        v.sort()
+    if len(out) > 300:
+        save_cache("dvh", d, out)
+    return out
+
+
+def div_analysis(a):
+    """配息頻率、年化殖利率、填息狀況，並判斷「為了配息買值不值得」"""
+    code, c = a["code"], a["close"]
+    if is_etf(code) and code[-1] in "LR":
+        return {"freq": "不配息", "verdict": "不適合領息", "vc": "bad", "score": 0, "events": [],
+                "why": [["bad", "槓桿 / 反向型 ETF 不以配息為目的，長期持有會耗損，只適合短線"]]}
+    today = datetime.strptime(a["date"], "%Y-%m-%d").date()
+    ev = [e for e in DIVH.get(code, []) if e[1] > 0 and (today - datetime.strptime(e[0], "%Y-%m-%d").date()).days <= 400]
+    ex = (PROFILE.get(code) or {}).get("ex") or {}
+    nxt = None
+    if ex.get("date") and ex["date"].replace("/", "-") > a["date"] and "權" not in (ex.get("type") or "")[-1:]:
+        nxt = {"date": ex["date"].replace("/", "-"), "cash": ex.get("cash")}
+    if not ev:
+        return None if not nxt else {"freq": "新配息", "events": [], "next": nxt, "verdict": "資料不足", "vc": "", "score": None, "why": []}
+    ds = [datetime.strptime(e[0], "%Y-%m-%d").date() for e in ev]
+    if len(ev) >= 2:
+        gaps = sorted((ds[i + 1] - ds[i]).days for i in range(len(ds) - 1))
+        g = gaps[len(gaps) // 2]
+        freq = "月配" if g <= 40 else "雙月配" if g <= 75 else "季配" if g <= 125 else "半年配" if g <= 240 else "年配"
+    else:
+        freq = "年配"
+    n = FREQ_N[freq]
+    recent = ev[-n:]
+    last = ev[-1][1]
+    est = round(sum(e[1] for e in recent) / len(recent) * n, 4)
+    ttm = round(sum(e[1] for e in ev if (today - datetime.strptime(e[0], "%Y-%m-%d").date()).days <= 365), 4)
+    yld = round(est / c * 100, 2) if c else None
+    # 填息：除息後股價回到除息前收盤價
+    s = HIST.get(code) or {}
+    fills = []
+    for e in ev[-4:]:
+        pre = e[2]
+        if not pre:
+            continue
+        dl = s.get("dates") or []
+        idx = [i for i, x in enumerate(dl) if x >= e[0]] if dl and e[0] >= dl[0] else []
+        days = None
+        for k, i in enumerate(idx):
+            if s["h"][i] >= pre:
+                days = k + 1; break
+        fills.append({"date": e[0], "cash": e[1], "pre": pre, "filled": days is not None or c >= pre, "days": days})
+    fr = sum(1 for x in fills if x["filled"]) / len(fills) if fills else None
+    sc, why = 0, []
+    if yld is None:
+        pass
+    elif yld >= 8:
+        sc += 30; why.append(["ok", f"年化殖利率 {yld}%，非常高（但超過 10% 要留意是否用本金配息、能否持續）" if yld > 10 else f"年化殖利率 {yld}%，很高"])
+    elif yld >= 6:
+        sc += 25; why.append(["ok", f"年化殖利率 {yld}%，高於定存很多"])
+    elif yld >= 4:
+        sc += 15; why.append(["ok", f"年化殖利率 {yld}%，不錯"])
+    elif yld >= 2.5:
+        sc += 5; why.append(["warn", f"年化殖利率 {yld}%，普通，買它主要是看成長而不是配息"])
+    else:
+        sc -= 5; why.append(["bad", f"年化殖利率只有 {yld}%，單純領息不划算"])
+    if fr is not None:
+        if fr >= 0.75:
+            sc += 25; why.append(["ok", f"最近 {len(fills)} 次配息有 {sum(x['filled'] for x in fills)} 次已填息，領了股息價格也回來了"])
+        elif fr >= 0.5:
+            sc += 10; why.append(["warn", f"最近 {len(fills)} 次配息有 {sum(x['filled'] for x in fills)} 次填息，填息速度普通"])
+        else:
+            sc -= 15; why.append(["bad", f"最近 {len(fills)} 次配息只有 {sum(x['filled'] for x in fills)} 次填息，容易「賺了股息、賠了價差」"])
+    if len(ev) >= 3:
+        prev = [e[1] for e in ev[-n - 1:-1]] or [e[1] for e in ev[:-1]]
+        avg = sum(prev) / len(prev)
+        if last >= avg * 0.95:
+            sc += 10; why.append(["ok", f"最近一次配 {last:g} 元，沒有縮水" + ("，還有變多" if last > avg * 1.05 else "")])
+        elif last < avg * 0.8:
+            sc -= 10; why.append(["bad", f"最近一次配 {last:g} 元，比之前平均 {avg:.3g} 元少了 {round((1 - last / avg) * 100)}%"])
+    if a.get("ma60"):
+        b = (c / a["ma60"] - 1) * 100
+        if b >= 0:
+            sc += 10; why.append(["ok", "股價在季線之上，趨勢穩定"])
+        elif b < -5:
+            sc -= 10; why.append(["warn", f"股價低於季線 {abs(round(b))}%，價格還在跌，可分批慢慢買"])
+    if not is_nonstock(code):
+        f = fundamentals(a)
+        if f.get("payout") and f["payout"] > 100:
+            sc -= 15; why.append(["bad", f"配發率 {f['payout']:.0f}%，配的比賺的多，之後股息可能減少"])
+        elif f.get("eps_ttm") is not None and f["eps_ttm"] <= 0:
+            sc -= 15; why.append(["bad", "近四季虧損，股息不容易維持"])
+        v = sv_of(a)["verdict"]
+        if v in ("疑似炒作", "題材投機"):
+            sc -= 15; why.append(["bad", f"鑑定為「{v}」，不適合存股"])
+    elif code.endswith("B"):
+        why.append(["warn", "債券型 ETF：利率下降時價格會漲、利率上升時會跌"])
+    if nxt:
+        why.append(["warn", f"下次除息 {nxt['date']}" + (f"，每單位 {nxt['cash']:g} 元" if nxt.get("cash") else "（金額尚未公告）") +
+                    "；單次領超過 2 萬元要扣 2.11% 健保補充保費，也要併入所得稅"])
+    verdict, vc = ("值得買", "ok") if sc >= 55 else ("可以考慮", "ok") if sc >= 35 else ("普通", "warn") if sc >= 15 else ("不建議只為配息買", "bad")
+    months = sorted({int(e[0][5:7]) for e in ev})
+    return {"freq": freq, "months": months, "last": last, "est": est, "ttm": ttm, "yield": yld, "fills": fills,
+            "fill_rate": round(fr * 100) if fr is not None else None, "next": nxt, "score": sc, "verdict": verdict, "vc": vc,
+            "why": why, "events": ev[-12:]}
+
+
+def div_list(latest):
+    """配息股清單（依頻率分類），每列：代號 名稱 種類 頻率 除息月份 最近配 年化殖利率 填息率 分數 判斷 下次除息 收盤 漲跌"""
+    out = []
+    for a in latest:
+        if a["vol"] < 20:
+            continue
+        d = div_analysis(a)
+        if not d or d["freq"] not in FREQ_N:
+            continue
+        out.append([a["code"], a["name"], sec_type(a["code"]), d["freq"], d["months"], d["last"], d["yield"], d["fill_rate"],
+                    d["score"], d["verdict"], (d["next"] or {}).get("date"), a["close"], a["chg_pct"]])
+    out.sort(key=lambda r: -(r[8] or 0))
+    return out
+
+
+def etf_list(latest):
+    """ETF 買賣建議：成交量足夠的 ETF，附進出場價與配息判斷"""
+    out = []
+    for a in latest:
+        if sec_type(a["code"]) != "ETF" or (a["vma20"] or 0) < 300 or a["days"] < 30:
+            continue
+        p = generic_plan(a)
+        d = div_analysis(a) or {}
+        lev = a["code"][-1] in "LR"
+        kind = "槓桿/反向" if lev else "債券" if a["code"].endswith("B") else "股票型"
+        if p["trend"] == "多頭" and (a["rsi"] or 50) < 75:
+            act, ac = "可分批買進", "up"
+        elif p["trend"] == "多頭":
+            act, ac = "偏多但過熱，等拉回", ""
+        elif p["trend"] == "空頭":
+            act, ac = ("先觀望（短線偏弱）" if lev else "等站回月線再買；存股可小量分批"), "down"
+        else:
+            act, ac = "盤整，靠近進場區再買", ""
+        out.append({"code": a["code"], "name": a["name"], "kind": kind, "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
+                    "ret20": a.get("ret20"), "plan": p, "act": act, "ac": ac, "freq": d.get("freq"), "yield": d.get("yield"),
+                    "dv": d.get("verdict"), "dvc": d.get("vc"), "value": round(a["vol"] * a["close"] / 1e5, 1)})
+    out.sort(key=lambda r: -r["value"])
+    return out[:150]
 
 
 def daytrade_info(a):
@@ -2145,9 +2331,10 @@ function toggleWatch(c){let w=getWatch();const on=!w.includes(c);w=on?[...w,c]:w
 
 function render(){
   overview();
-  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
+  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['etf','🏦 ETF 買賣'],['divs','💰 配息股'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
   $('#tabs').innerHTML=tabsHTML(tabs);
   if($('#newsslot'))$('#newsslot').innerHTML=newsPanel();
+  if(TAB==='etf')setTimeout(fillEtf);if(TAB==='divs')setTimeout(fillDiv);
   if(TAB==='all'&&$('#alist')){$('#tabs').innerHTML=tabsHTML(tabs);fillAll();return}
   let h='';
   const bear=['空頭','短線轉弱'].includes(R.market.mood)?`<div class="status down" style="margin-bottom:12px">⚠️ 大盤目前為「${R.market.mood}」，個股推薦成功率會下降，${R.market.position}。</div>`:'';
@@ -2165,6 +2352,20 @@ function render(){
       <div class="mut" style="font-size:12px">昨收 ${f(r.close)}（<span class="${cls(r.chg_pct)}">${sg(r.chg_pct)}${f(r.chg_pct)}%</span>）・波動 ${f(r.atr_pct,1)}%・昨日當沖比 ${r.ratio!=null?f(r.ratio,1)+'%':'-'}・${r.susp?'只能先買後賣':'可雙向'}</div>
       ${dtPlan(r)}</div>`).join('')||'<div class=mut>今天沒有符合條件的股票</div>'}</div>
     <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。風報比＝可能賺的價差 ÷ 停損會虧的價差，大於 1.5 比較值得做。以上是依昨天資料算出的參考計畫，不是保證獲利。</div>`}
+  else if(TAB==='etf'){h=bear+`<p class="sub">成交量足夠的 ETF（依成交金額排序），每檔都有建議進場價、停損、目標價，以及配息頻率和「為配息買值不值得」。槓桿 / 反向型只適合短線，不適合長抱。</p>
+    <div class="filters"><input placeholder="搜尋 ETF 代號或名稱" value="${EQ}" oninput="EQ=this.value.trim();fillEtf()">
+    <select onchange="EK=this.value;fillEtf()">${['','股票型','債券','槓桿/反向'].map(v=>`<option value="${v}" ${v===EK?'selected':''}>${v||'全部種類'}</option>`).join('')}</select>
+    <select onchange="EF=this.value;fillEtf()">${['','月配','雙月配','季配','半年配','年配'].map(v=>`<option value="${v}" ${v===EF?'selected':''}>${v||'全部配息頻率'}</option>`).join('')}</select></div>
+    <div class="stocks" id="elist"></div>`}
+  else if(TAB==='divs'){const D=R.divs||[],cnt=k=>D.filter(r=>r[3]===k).length;
+    h=`<p class="sub">依「多久配一次息」分類，可以挑每個月都有錢進來的組合（例如 3 檔不同月份的季配息）。「判斷」綜合了殖利率、有沒有填息、配息有沒有縮水、股價趨勢和公司體質。</p>
+    <div class="chips">${['月配','雙月配','季配','半年配','年配',''].map(k=>`<button class="tab ${DF===k?'on':''}" onclick="DF='${k}';render()">${k||'全部'}（${k?cnt(k):D.length}）</button>`).join('')}</div>
+    <div class="filters"><input placeholder="搜尋代號或名稱" value="${DQ}" oninput="DQ=this.value.trim();fillDiv()">
+    <select onchange="DM=this.value;fillDiv()"><option value="">全部除息月份</option>${[1,2,3,4,5,6,7,8,9,10,11,12].map(m=>`<option value="${m}" ${String(m)===DM?'selected':''}>${m} 月有配息</option>`).join('')}</select>
+    <select onchange="DT=this.value;fillDiv()">${['','ETF','股票','特別股','REIT'].map(v=>`<option value="${v}" ${v===DT?'selected':''}>${v||'全部種類'}</option>`).join('')}</select>
+    <select onchange="DS=this.value;fillDiv()">${[['score','值得買程度'],['yld','殖利率高到低'],['fill','填息率高到低'],['next','即將除息']].map(o=>`<option value="${o[0]}" ${o[0]===DS?'selected':''}>${o[1]}</option>`).join('')}</select></div>
+    <div class="card tblwrap" id="dlist"></div>
+    <div class="mut" style="font-size:12px;margin-top:8px">年化殖利率＝最近幾次配息平均 × 一年配幾次 ÷ 現在股價。填息＝除息後股價漲回除息前的價格；沒填息代表領到的股息被股價下跌吃掉。以上依過去紀錄計算，未來配息可能改變。</div>`}
   else if(TAB==='all'){const inds=[...new Set(R.all.map(r=>r[3]).filter(Boolean))].sort();
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
     <div class="filters"><input id="fq" placeholder="搜尋代號或名稱" value="${AQ}" oninput="AQ=this.value.trim();AN=100;fillAll()">
@@ -2183,6 +2384,27 @@ function render(){
 }
 function tabsHTML(tabs){return tabs.map(t=>`<button class="tab ${TAB===t[0]?'on':''}" onclick="TAB='${t[0]}';$('#panel').innerHTML='';render()">${t[1]}</button>`).join('')}
 let AQ='',AI='',AS='chg',AN=100,AV='',AGR='';
+let EQ='',EK='',EF='',DF='月配',DQ='',DM='',DT='',DS='score';
+const vc=v=>({'值得買':'ok','可以考慮':'ok','普通':'warn','不建議只為配息買':'bad','不適合領息':'bad'})[v]||'';
+function fillEtf(){const el=$('#elist');if(!el)return;
+  const L=(R.etfs||[]).filter(r=>(!EQ||r.code.includes(EQ)||r.name.includes(EQ))&&(!EK||r.kind===EK)&&(!EF||r.freq===EF));
+  el.innerHTML=L.map(r=>{const Lv=LIVE[r.code],p=Lv&&Lv.price?Lv.price:r.close,c=Lv&&Lv.chg_pct!=null?Lv.chg_pct:r.chg_pct,pl=r.plan;
+    return `<div class="st click" onclick="lookup('${r.code}')"><div class="top"><div><span class="nm">${r.name}</span><span class="cd">${r.code}・${r.kind}</span>
+      <div style="margin-top:4px"><b class="${r.ac}">${r.act}</b></div></div>
+      <div class="price"><div class="p ${cls(c)}">${f(p)}</div><div class="${cls(c)}">${sg(c)}${f(c)}%</div><div class="mut" style="font-size:11px">20日 ${r.ret20!=null?sg(r.ret20)+f(r.ret20,1)+'%':'-'}</div></div></div>
+      <div class="plan"><div><small>建議進場</small><b class="up">${f(pl.entry_lo)}~${f(pl.entry_hi)}</b></div><div><small>停損 (${pl.stop_pct}%)</small><b class="down">${f(pl.stop)}</b></div>
+        <div><small>目標一 (+${pl.t1_pct}%)</small><b>${f(pl.t1)}</b></div><div><small>目標二</small><b>${f(pl.t2)}</b></div></div>
+      <div class="mut" style="font-size:12px">趨勢 ${pl.trend}｜風報比 ${pl.rr??'-'}｜${r.freq?r.freq+(r.yield!=null?' 殖利率 '+f(r.yield)+'%':''):'近一年沒有配息'}
+      ${r.dv?`｜領息判斷 <span class="vtag ${vc(r.dv)}">${r.dv}</span>`:''}</div>${pl.note?`<div class="mut" style="font-size:12px">${pl.note}</div>`:''}</div>`}).join('')||'<div class=mut>沒有符合的 ETF</div>'}
+function fillDiv(){const el=$('#dlist');if(!el)return;
+  let L=(R.divs||[]).filter(r=>(!DF||r[3]===DF)&&(!DQ||r[0].includes(DQ)||r[1].includes(DQ))&&(!DM||r[4].includes(+DM))&&(!DT||r[2]===DT));
+  const k={score:r=>-(r[8]??-99),yld:r=>-(r[6]??0),fill:r=>-(r[7]??-1),next:r=>r[10]||'9'}[DS];L=L.slice().sort((a,b)=>{const x=k(a),y=k(b);return x<y?-1:x>y?1:0});
+  const mo=m=>m.length>=12?'每個月':m.join('、')+' 月';
+  el.innerHTML=`<table><tr><th>名稱</th><th>配息</th><th>殖利率</th><th>填息率</th><th>值不值得</th><th>下次除息</th></tr>
+  ${L.slice(0,300).map(r=>`<tr class="click" onclick="lookup('${r[0]}')"><td><b>${r[1]}</b><br><small class="mut">${r[0]}・${r[2]}・${f(r[11])}</small></td>
+    <td>${r[3]}<br><small class="mut">${mo(r[4])}・最近 ${r[5]} 元</small></td>
+    <td class="${r[6]>=6?'up':''}">${r[6]!=null?f(r[6])+'%':'-'}</td><td>${r[7]!=null?r[7]+'%':'-'}</td><td><span class="vtag ${vc(r[9])}">${r[9]}</span></td><td>${r[10]?r[10].slice(5):'-'}</td></tr>`).join('')}</table>
+  ${L.length?(L.length>300?'<div class="mut" style="padding:8px">只顯示前 300 檔，請用搜尋或篩選</div>':''):'<div class="mut" style="padding:10px">沒有符合的股票</div>'}`}
 const SORTS=[['chg','漲幅由高到低'],['chgd','跌幅由高到低'],['vol','成交量由大到小'],['total','分析師總評分'],['str','真實力分數'],['hype','炒作風險由高到低'],
   ['pe','本益比由低到高'],['yld','殖利率由高到低'],['grow','營收成長由高到低'],['gm','毛利率由高到低'],['r20','20日漲幅由高到低'],['mcap','市值由大到小'],['code','依代號']];
 const NV=x=>x==null?-1e9:x;
@@ -2295,6 +2517,17 @@ function peerSection(d){
       <td><span class="vtag ${r[8]||''}">${r[7]}</span></td><td>${r[13]!=null?f(r[13],0):'-'}</td><td>${r[9]!=null?f(r[9],1):'-'}</td><td>${r[10]!=null?f(r[10])+'%':'-'}</td>
       <td class="${cls(r[11])}">${r[11]!=null?f(r[11],1)+'%':'-'}</td><td>${r[12]!=null?f(r[12],1)+'%':'-'}</td><td class="${cls(r[14])}">${r[14]!=null?f(r[14],1)+'%':'-'}</td></tr>`).join('')}</table></div></div>`
 }
+function divSection(d){
+  const v=d.dv;if(!v)return'';const ic={ok:'✓',bad:'✗',warn:'!'};
+  if(!v.events.length)return `<div class="sec"><h3>配息分析</h3><div><span class="vtag ${vc(v.verdict)}">${v.verdict}</span></div><ul class="checks">${v.why.map(c=>`<li><b class="c-${c[0]}">${ic[c[0]]}</b><span>${c[1]}</span></li>`).join('')}</ul>${v.next?`<div>下次除息 ${v.next.date}${v.next.cash?'，'+v.next.cash+' 元':''}</div>`:''}</div>`;
+  return `<div class="sec"><h3>配息分析：為了領息買值不值得？</h3>
+    <div style="font-size:15px;margin-bottom:6px"><b>${v.freq}</b>（${v.months.join('、')} 月除息）　判斷 <span class="vtag ${vc(v.verdict)}" style="font-size:16px">${v.verdict}</span> <span class="mut">${v.score} 分</span></div>
+    ${kv2([['最近一次配息',v.last+' 元'],['預估一年配息',f(v.est,3)+' 元'],['年化殖利率',v.yield!=null?f(v.yield)+'%':'-',v.yield>=6?'up':''],['近 12 個月實配',f(v.ttm,3)+' 元'],
+      ['填息率',v.fill_rate!=null?v.fill_rate+'%':'-'],['下次除息',v.next?v.next.date.slice(5)+'（'+v.next.cash+' 元）':'尚未公告']])}
+    <ul class="checks">${v.why.map(c=>`<li><b class="c-${c[0]}">${ic[c[0]]}</b><span>${c[1]}</span></li>`).join('')}</ul>
+    ${v.fills&&v.fills.length?`<div class="tblwrap"><table><tr><th>除息日</th><th>配息</th><th>除息前價格</th><th>填息</th></tr>${v.fills.slice().reverse().map(x=>`<tr><td>${x.date}</td><td>${x.cash}</td><td>${f(x.pre)}</td><td class="${x.filled?'up':'down'}">${x.filled?(x.days?x.days+' 天填息':'已填息'):'尚未填息'}</td></tr>`).join('')}</table></div>`:''}
+    <div class="mut" style="font-size:12px;margin-top:6px">配息會從股價扣掉（除息），要等股價漲回來（填息）才算真的賺到。只看殖利率高就買，可能賺了股息賠了價差。</div></div>`
+}
 function dtSection(d){
   const t=d.dt;if(!t)return'';
   const st=!t.listed?'<b class="down">不可現股當沖</b>':t.dispose?'<b class="down">處置中，當沖受限制</b>':t.susp?'<b>只能先買後賣</b>（暫停先賣後買）':'<b class="up">可以雙向現股當沖</b>';
@@ -2362,7 +2595,7 @@ function detailHTML(d){
     <div class="summary">${E.summary}</div>${cardPanel(d)}${verdictPanel(d)}</div>
   <div class="sec"><h3>K 線圖（近 60 日）</h3>${kchart(d)}</div>
   ${liveSecHTML(d)}
-  ${dtSection(d)}
+  ${divSection(d)}${dtSection(d)}
   ${stockCard(d)}
   ${(d.news&&d.news.length)?`<div class="sec"><h3>近期新聞</h3><div class="news">${newsItems(d.news)}</div></div>`:''}
   <div class="sec"><h3>分析師觀點</h3>
