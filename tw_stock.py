@@ -2341,7 +2341,10 @@ function netPL(code,cost,qty,price){const buy=cost*qty*(1+0.001425),sell=price*q
 function myStop(d,h){const pl=d.plan,L=LIVE[d.code],px=L&&L.price?L.price:d.close;
   // 空頭時的計畫停損是給「站回月線才買」用的，持股改用近 20 日低點
   const base=pl.trend==='空頭'&&px<pl.entry_lo?Math.min(pl.stop,Math.round((d.low20||px)*0.98*100)/100):pl.stop;
-  return px>=h.price*1.1?Math.max(base,h.price):Math.max(base,Math.round(h.price*0.92*100)/100)}
+  const tk=p=>{const t=p<10?.01:p<50?.05:p<100?.1:p<500?.5:p<1000?1:5;return Math.round(Math.floor(p/t+1e-9)*t*100)/100};
+  const cs=tk(h.price*0.92);   // 成本 -8%
+  // 已經虧超過 8%：成本停損早就過了，改用目前價格下方的技術支撐，不再顯示比現價還高的停損
+  return px>=h.price*1.1?Math.max(base,h.price):px>cs?Math.max(base,cs):Math.min(base,tk(Math.min(d.low20||px,px-(d.atr||px*0.02)*1.5)))}
 function longTarget(d){const t=d.rep&&d.rep.target;if(t&&t>d.close)return{v:t,src:'依 EPS × 合理本益比估算的合理價'};
   const hi=d.high60||d.plan.t2;const v=Math.max(hi,d.plan.t2)*1.1;return{v:Math.round(v*100)/100,src:'60 日高點突破後的下一個壓力（技術面估算）'}}
 function buyAdvice(d,price){const pl=d.plan,rt=(d.rep||{}).rating,v=(d.sv||{}).verdict;
@@ -2372,12 +2375,19 @@ function holdBox(d){
         股數 <input id="hq_${d.code}" type="number" value="${q||1000}" style="width:80px"><button class="g" onclick="event.stopPropagation();saveHold('${d.code}')">記錄買進</button></div></div>`}
   const n=netPL(d.code,h.price,h.qty,price),stop=myStop(d,h);let a,ac,why;
   if(price<=stop){a='建議停損';ac='bad';why=`現價 ${f(price)} 已跌破停損 ${f(stop)}，建議賣出，保住本金`}
+  else if(price<h.price*0.92){a='已套牢';ac='warn';why=`現價 ${f(price)} 比成本低 ${f((1-price/h.price)*100,1)}%，已超過一般停損 8%。要續抱還是認賠，請看下面「套牢評估」；跌破近期支撐 ${f(stop)} 一定要賣`}
   else if(price>=pl.t2){a='獲利了結';ac='ok';why=`已到短期第二目標 ${f(pl.t2)}，建議賣出大部分；看好長期可留一點到 ${f(lt.v)}`}
   else if(price>=pl.t1){a='先賣一半';ac='ok';why=`已到短期第一目標 ${f(pl.t1)}，先賣一半，剩下的停損移到成本 ${f(h.price)}`}
   else if(pl.trend==='空頭'){a='減碼 / 設好停損';ac='warn';why=`趨勢偏弱，反彈到月線 ${f(d.ma20)} 附近可以減碼，跌破 ${f(stop)} 就停損`}
   else{a='續抱等待';ac='ok';why=`趨勢沒有轉壞，繼續持有，等漲到 ${f(pl.t1)}；跌破 ${f(stop)} 才停損`}
+  const L2=LIVE[d.code],cp=L2&&L2.chg_pct!=null?L2.chg_pct:d.chg_pct,gap=(h.price/price-1)*100;
   return `<div class="sec" ${st()} style="margin-top:10px;border-top:1px dashed var(--line);padding-top:8px"><b>我的持股</b> <span class="vtag ${ac}">${a}</span>
+    <div class="card" style="padding:8px;margin:6px 0;display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;text-align:center">
+      <div><small class="mut">現在價格</small><div style="font-size:18px;font-weight:800" class="${cls(cp)}">${f(price)}</div><small class="${cls(cp)}">今日 ${sg(cp)}${f(cp)}%</small></div>
+      <div><small class="mut">我的成本價</small><div style="font-size:18px;font-weight:800">${f(h.price)}</div><small class="${cls(-gap)}">${gap>0?'還差 '+f(gap,1)+'% 回本':'已高於成本 '+f(-gap,1)+'%'}</small></div>
+      <div><small class="mut">我的停損價</small><div style="font-size:18px;font-weight:800" class="down">${f(stop)}</div><small class="mut">離現價 ${f((stop/price-1)*100,1)}%</small></div></div>
     <div style="font-size:13px;margin:4px 0">${why}</div>
+    ${price<h.price?recoverBox(d,h,price,stop,lt):''}
     <div style="font-size:13px;line-height:1.7">共 <b>${qtyTxt(h.qty)}</b>，綜合成本價 <b>${f(h.price)}</b>，投入約 <b>${f(n.buy,0)}</b> 元（含手續費）<br>
       現在市值約 ${f(price*h.qty,0)} 元，扣手續費和稅後 <b class="${cls(n.pl)}">${sg(n.pl)}${f(n.pl,0)} 元（${sg(n.pct)}${f(n.pct,1)}%）</b><br>
       🛑 我的停損價 <b class="down">${f(stop)}</b>${price>=h.price*1.1?'（已賺 10% 以上，停損移到成本，保住獲利）':''}</div>
@@ -2389,6 +2399,36 @@ function holdBox(d){
     <div class="mut" style="font-size:12px;margin-top:4px">加碼後：${(()=>{const q2=1000,a2=(h.amt+price*q2)/(h.qty+q2);return `若用現價再買 1 張，綜合成本會變成 ${f(a2)}`})()}</div>
     <div style="margin-top:6px;text-align:right"><button class="g" onclick="event.stopPropagation();delHold('${d.code}')">已全部賣出 / 清除紀錄</button></div></div>`
 }
+// 套牢評估：成本價在現價之上，判斷有沒有機會漲回來、大概要多久
+function recoverBox(d,h,price,stop,lt){
+  const pl=d.plan,need=(h.price/price-1)*100,atrp=d.atr?d.atr/price*100:2,v=(d.sv||{}).verdict,rt=(d.rep||{}).rating,ic={ok:'✓',bad:'✗',warn:'!'};
+  let sc=0;const pts=[];
+  if(pl.trend==='多頭'){sc+=2;pts.push(['ok','股價在月線之上，趨勢向上，有利回升'])}
+  else if(pl.trend==='空頭'){sc-=2;pts.push(['bad',`趨勢向下（月線 ${f(d.ma20)} 之下），短期還可能再跌`])}
+  else pts.push(['warn','股價在月線附近整理，方向還不明確']);
+  if(v==='實力股'||v==='有實力但短線過熱'){sc+=2;pts.push(['ok','公司有實力（基本面紮實），跌下來比較有機會漲回去'])}
+  else if(v==='疑似炒作'||v==='題材投機'){sc-=3;pts.push(['bad',`鑑定為「${v}」，被炒高後常常一去不回`])}
+  else if(v==='體質偏弱'){sc-=2;pts.push(['bad','公司體質偏弱，缺少上漲的理由'])}
+  if(d.rep&&d.rep.target){if(d.rep.target>=h.price){sc+=2;pts.push(['ok',`基本面合理價 ${f(d.rep.target)} 高於你的成本，長期有機會回本`])}
+    else{sc-=2;pts.push(['bad',`基本面合理價只有 ${f(d.rep.target)}，低於你的成本 ${f(h.price)}，買貴了`])}}
+  if(d.high60&&h.price>d.high60){sc-=1;pts.push(['bad',`你的成本比近 60 天最高價 ${f(d.high60)} 還高，買在高點`])}
+  else if(d.high60)pts.push(['ok',`近 60 天最高到過 ${f(d.high60)}，你的成本在這個範圍內`]);
+  const res=[[d.ma20,'月線'],[d.ma60,'季線']].filter(x=>x[0]&&x[0]>price&&x[0]<h.price);
+  if(res.length)pts.push(['warn','回本前要先突破 '+res.map(x=>x[1]+' '+f(x[0])).join('、')+'（壓力）']);
+  if(rt==='買進'||rt==='逢低布局'){sc+=1;pts.push(['ok',`分析師評等「${rt}」`])}else if(rt==='觀望 / 減碼'){sc-=1;pts.push(['bad','分析師評等「觀望 / 減碼」'])}
+  const days=Math.ceil(need/(atrp*0.35));
+  let when;if(h.price<=pl.t1)when='1～4 週內就有機會回本（成本在短期目標一之內）';
+  else if(h.price<=pl.t2)when='約 1～2 個月，要漲到短期目標二附近才回本';
+  else if(h.price<=lt.v)when='需要 6～12 個月，要靠長期上漲才回本';
+  else when='成本高於長期目標價，一年內回本的機會很低';
+  let vd,vc;if(sc>=3&&h.price<=lt.v){vd='有機會漲回來，可以等';vc='ok'}else if(sc>=0&&h.price<=lt.v*1.05){vd='需要時間，邊等邊設好停損';vc='warn'}else{vd='很難漲回來，建議停損或反彈減碼';vc='bad'}
+  const add=Math.ceil(h.qty*(h.price-price*1.05)/(price*0.05)/1)||0,canAvg=vc==='ok'&&pl.trend!=='空頭';
+  return `<div class="card" style="padding:10px;margin:6px 0;border:2px solid var(--line)"><b>🔍 套牢評估：會不會漲回來？</b> <span class="vtag ${vc}">${vd}</span>
+    <div style="font-size:13px;margin:4px 0">現價 ${f(price)} 要漲 <b>${f(need,1)}%</b> 才回到成本 ${f(h.price)}（扣稅費約 ${f(h.price*1.0045)}）。<br>⏱ ${when}${need<30&&h.price<=pl.t2?`；以平均每天波動 ${f(atrp,1)}% 推估，順利的話約 ${days} 個交易日`:''}。</div>
+    <ul class="checks">${pts.map(c=>`<li><b class="c-${c[0]}">${ic[c[0]]}</b><span>${c[1]}</span></li>`).join('')}</ul>
+    <div style="font-size:13px;margin-top:4px"><b>建議做法：</b>${vc==='ok'?`續抱等回升；跌破停損 ${f(stop)} 還是要賣，不要一直凹。`:vc==='warn'?`不要再加碼；反彈到 ${f(Math.min(d.ma20||pl.t1,h.price))} 附近可先賣一部分降低風險，跌破 ${f(stop)} 停損。`:`不要攤平；反彈到 ${f(Math.min(d.ma20||pl.t1,h.price))} 附近先減碼，跌破 ${f(stop)} 一定要停損，把錢換到更強的股票。`}</div>
+    ${canAvg&&add>0&&add<=h.qty*2?`<div class="mut" style="font-size:12px;margin-top:4px">攤平試算：用現價再買 ${qtyTxt(add)}（約 ${f(add*price,0)} 元），成本會降到約 ${f(price*1.05)}，股價只要漲 5% 就回本。攤平只適合趨勢沒轉壞的好公司。</div>`:''}
+    <div class="mut" style="font-size:11px;margin-top:4px">以上依目前趨勢、基本面合理價、實力鑑定推估，不保證一定會漲回來。</div></div>`}
 function saveHold(c){const p=+$('#hp_'+c).value,q=Math.round(+$('#hq_'+c).value);if(!(p>0&&q>0)){toast('請輸入買進價格和股數');return}
   const h=getHold(),add=!!h[c];(h[c]=h[c]||{lots:[]}).lots.push({price:p,qty:q,date:new Date().toLocaleDateString('zh-TW')});setHold(h);
   const hi=holdInfo(h[c]);toast(add?`已加碼，綜合成本價 ${f(hi.price)}，共 ${qtyTxt(hi.qty)}`:'已記錄，橘橘會幫你盯停損和目標價！');syncNativeWatch();render()}
