@@ -118,9 +118,14 @@ def save_cache(kind, d, obj):
         json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
 
 
+def is_etf(code):
+    # ETF: 00 開頭，例如 0050、00878、00631L、006201
+    return code.startswith("00") and 4 <= len(code) <= 6 and code[:4].isdigit() and code.isalnum()
+
+
 def is_stock_code(code):
-    # 一般股票: 4 碼數字且不是 ETF(00 開頭)
-    return len(code) == 4 and code.isdigit() and not code.startswith("00")
+    # 一般股票 (4 碼數字) 或 ETF；不含權證、ETN
+    return (len(code) == 4 and code.isdigit() and not code.startswith("00")) or is_etf(code)
 
 
 def fetch_twse_quotes(d):
@@ -241,13 +246,13 @@ def update_data():
     for d in dates:
         if len(trading) >= HISTORY_DAYS:
             break
-        tw = get_day("twse", fetch_twse_quotes, d)
+        tw = get_day("twse2", fetch_twse_quotes, d)
         if tw is None:   # 多半是請求太頻繁被暫時擋下，稍等再試一次
             time.sleep(15)
-            tw = get_day("twse", fetch_twse_quotes, d)
+            tw = get_day("twse2", fetch_twse_quotes, d)
         if tw is None or tw.get("holiday"):
             continue
-        trading.append((d, tw, pool.submit(get_day, "tpex", fetch_tpex_quotes, d)))
+        trading.append((d, tw, pool.submit(get_day, "tpex2", fetch_tpex_quotes, d)))
         STATUS["progress"] = int(len(trading) / HISTORY_DAYS * 75)
         STATUS["msg"] = f"行情資料 {len(trading)}/{HISTORY_DAYS} 天 (目前: {d:%Y-%m-%d})"
     STATUS["msg"] = "等待上櫃行情下載完成…"
@@ -281,10 +286,10 @@ def update_data():
     log("下載三大法人買賣超…")
     inst = {}
     days = [d for d, _, _ in trading[-INST_DAYS:]]
-    futs = [(d, pool.submit(get_day, "tpinst", fetch_tpex_inst, d)) for d in days]
+    futs = [(d, pool.submit(get_day, "tpinst2", fetch_tpex_inst, d)) for d in days]
     tw_inst = []
     for i, d in enumerate(days):
-        tw_inst.append((d, get_day("twinst", fetch_twse_inst, d)))
+        tw_inst.append((d, get_day("twinst2", fetch_twse_inst, d)))
         STATUS["progress"] = 80 + int((i + 1) / len(days) * 15)
     for d, r in tw_inst + [(d, f.result()) for d, f in futs]:
         if r and r.get("inst"):
@@ -317,6 +322,8 @@ def update_data():
     global RISK, HIST2
     log("下載籌碼結構與注意/處置股資料…")
     RISK = load_risk(trading[-1][0])
+    global DTLIST
+    DTLIST = load_dtlist(trading[-1][0])
     global EXTRA, TAIEX_RET20, DATES
     log("下載財報、董監持股質押、外資持股、重大訊息…")
     EXTRA = load_extra(trading[-1][0])
@@ -479,7 +486,7 @@ def analyze(code):
 
 
 def liquid(a):
-    return a and a["days"] >= 60 and a["close"] >= 10 and (a["vma20"] or 0) >= 800 and a["vol"] >= 300
+    return a and not is_etf(a["code"]) and a["days"] >= 60 and a["close"] >= 10 and (a["vma20"] or 0) >= 800 and a["vol"] >= 300
 
 
 def score_momentum(a):
@@ -725,10 +732,10 @@ def build_report(taiex, last_date):
 
     up = sum(1 for a in latest if a["chg"] > 0)
     down = sum(1 for a in latest if a["chg"] < 0)
-    tradable = [a for a in latest if a["vol"] >= 500]
+    tradable = [a for a in latest if a["vol"] >= 500 and not is_etf(a["code"])]
     gainers = sorted(tradable, key=lambda a: -a["chg_pct"])[:10]
     losers = sorted(tradable, key=lambda a: a["chg_pct"])[:10]
-    by_value = sorted(latest, key=lambda a: -(a["vol"] * a["close"]))[:10]
+    by_value = sorted([a for a in latest if not is_etf(a["code"])], key=lambda a: -(a["vol"] * a["close"]))[:10]
     foreign_buy = sorted(latest, key=lambda a: -a["f5"])[:10]
 
     # 大盤多空判斷
@@ -765,7 +772,8 @@ def build_report(taiex, last_date):
         "losers": [simple(a) for a in losers],
         "by_value": [simple(a) for a in by_value],
         "foreign_buy": [simple(a) for a in foreign_buy],
-        "all": [[a["code"], a["name"], a["market"], (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
+        "daytrade": daytrade_list(latest),
+        "all": [[a["code"], a["name"], a["market"], "ETF" if is_etf(a["code"]) else (PROFILE.get(a["code"]) or {}).get("ind") or "", a["close"],
                  a["chg_pct"], a["vol"], sv_of(a)["verdict"], sv_of(a)["vc"]] + sv_of(a)["row"]
                 for a in sorted(latest, key=lambda x: x["code"])],
     }
@@ -922,7 +930,7 @@ def fundamentals(a):
     p = PROFILE.get(code, {})
     pe, yld, pb = FUND.get(code, (None, None, None))
     e = p.get("eps") or {}
-    f = {"ind": p.get("ind") or "", "pe": pe, "pb": pb, "ind_pe": IND_PE.get(p.get("ind") or "")}
+    f = {"ind": "ETF" if is_etf(code) else (p.get("ind") or ""), "pe": pe, "pb": pb, "ind_pe": IND_PE.get(p.get("ind") or "")}
     if pe and pe > 0:
         f["eps_ttm"] = round(c / pe, 2)
     if e.get("eps") is not None and e.get("q"):
@@ -1034,6 +1042,14 @@ def analyst_report(a, f, plan):
                 "中立": "多空因素交錯，建議區間操作或等待更明確訊號。", "觀望 / 減碼": "目前風險大於機會，建議暫時觀望，持有者控管部位。"}[rating]
     if target:
         summary += f" 以全年化 EPS {f['eps_base']:.2f} 元 × 合理本益比估算，合理價約 {target}（{'+' if upside >= 0 else ''}{upside}%）。"
+    if is_etf(a["code"]):
+        rating, rc = {"多頭": ("逢低布局", "up"), "空頭": ("觀望 / 減碼", "down")}.get(plan["trend"], ("中立", ""))
+        lev = a["code"].endswith(("L", "R"))
+        summary = (f"{a['name']}是 ETF（{'槓桿 / 反向型，只適合短線' if lev else '一次買進一籃子股票'}），沒有單一公司的財報。"
+                   f"目前趨勢「{plan['trend']}」，" + {"逢低布局": "可在支撐附近分批買進。", "觀望 / 減碼": "建議等站回月線再考慮。", "中立": "可以定期定額或區間操作。"}[rating])
+        fund_pts = ["ETF 沒有公司財報，主要看追蹤的指數、配息與折溢價"]
+        target, upside = None, None
+        risks = ["槓桿 / 反向 ETF 長期持有會有耗損"] if lev else risks
     return {"rating": rating, "rc": rc, "points": pts, "target": target, "upside": upside, "summary": summary,
             "fund": fund_pts, "tech": tech_pts, "chip": chip_pts, "risks": risks or ["無明顯重大風險，仍須注意大盤系統性風險"]}
 
@@ -1070,6 +1086,8 @@ def stock_detail(code):
     o["fh"] = fh = fin_health(code, a)
     o["pat"] = pat = price_patterns(code, a)
     o["card"] = scorecard(a, f, fh, o["chip2"], sv, pat)
+    o["etf"] = is_etf(code)
+    o["dt"] = daytrade_info(a)
     s = HIST[code]
     k = min(60, len(s["c"]))
     o["ohlc"] = [[s["o"][i], s["h"][i], s["l"][i], s["c"][i], s["v"][i]] for i in range(len(s["c"]) - k, len(s["c"]))]
@@ -1120,7 +1138,7 @@ def fetch_tdcc():
 
 
 def load_risk(d):
-    c = load_cache("risk", d)
+    c = load_cache("risk2", d)
     if c:
         return c
     tw, tp = "https://openapi.twse.com.tw/v1/", "https://www.tpex.org.tw/openapi/v1/"
@@ -1183,7 +1201,7 @@ def load_risk(d):
         tdcc = {"date": None, "data": {}}
     c = {"dt": dt, "mg": mg, "flags": flags, "tv": tv, "tdcc": tdcc}
     if mg:
-        save_cache("risk", d, c)
+        save_cache("risk2", d, c)
     return c
 
 
@@ -1195,7 +1213,7 @@ def build_hist2(prev):
     for code, rows in (prev or {}).get("tdcc", {}).items():
         tdh[code] = {r[0]: r[1] for r in rows}
     for fn in sorted(os.listdir(DATA_DIR)):
-        if not fn.endswith("_risk.json"):
+        if not (fn.endswith("_risk.json") or fn.endswith("_risk2.json")):
             continue
         try:
             with open(os.path.join(DATA_DIR, fn), encoding="utf-8") as fh:
@@ -1256,6 +1274,13 @@ def themes_for(code):
 
 def strength_vs_hype(a, f, ch):
     """判斷是真有實力，還是人為炒作 / 題材炒作"""
+    if is_etf(a["code"]):
+        checks = [["ok", "ETF 一次買進一籃子股票，風險分散，不易被單一主力炒作"]]
+        if a["code"].endswith(("L", "R")):
+            checks.append(["warn", "這是槓桿或反向型 ETF，只適合短線，長期持有會有耗損"])
+        if (ch.get("daytrade") or 0) >= 35:
+            checks.append(["warn", f"當沖比 {ch['daytrade']}% 偏高"])
+        return {"strength": None, "hype": 0, "hype_lv": "低", "verdict": "ETF", "vc": "", "checks": checks}
     st, hy, checks = 0, 0, []
     ok = lambda t: checks.append(["ok", t])
     bad = lambda t: checks.append(["bad", t])
@@ -1363,6 +1388,60 @@ def strength_vs_hype(a, f, ch):
     else: v, vc = "中性觀察", ""
     hl = "高" if hy >= 50 else "中" if hy >= 25 else "低"
     return {"strength": st, "hype": hy, "hype_lv": hl, "verdict": v, "vc": vc, "checks": checks}
+
+
+# ---------------------------------------------------------------- 當沖
+DTLIST = {}    # code -> "" (可雙向當沖) / "Y" (暫停先賣後買)
+
+
+def load_dtlist(d):
+    c = load_cache("dtl", d)
+    if c:
+        return c
+    out = {}
+    for r in fetch_list("https://openapi.twse.com.tw/v1/exchangeReport/TWTB4U"):
+        out[(r.get("Code") or "").strip()] = (r.get("Suspension") or "").strip()
+    for r in fetch_list("https://www.tpex.org.tw/openapi/v1/tpex_securities"):
+        out[(r.get("證券代號") or "").strip()] = (r.get("暫停現股賣出後現款買進當沖註記") or "").strip()
+    out = {k: v for k, v in out.items() if k}
+    if out:
+        save_cache("dtl", d, out)
+    return out
+
+
+def daytrade_info(a):
+    """可否當沖、昨日當沖比、今日樞紐價位（壓力 / 支撐）"""
+    code = a["code"]
+    s = HIST[code]
+    h, l, c = s["h"][-1], s["l"][-1], s["c"][-1]
+    pp = (h + l + c) / 3
+    flags = {k for k, _ in RISK.get("flags", {}).get(code, [])}
+    dtv = RISK.get("dt", {}).get(code)
+    o = {"ok": code in DTLIST and "處置" not in flags, "listed": code in DTLIST, "susp": DTLIST.get(code) == "Y", "dispose": "處置" in flags,
+         "ratio": round(dtv / a["vol"] * 100, 1) if dtv is not None and a["vol"] else None,
+         "atr_pct": round(a["atr"] / c * 100, 2) if c else None,
+         "pp": rnd(pp), "r1": rnd(2 * pp - l), "s1": rnd(2 * pp - h), "r2": rnd(pp + (h - l)), "s2": rnd(pp - (h - l))}
+    return o
+
+
+def daytrade_list(latest):
+    """當沖參考名單：可當沖、成交量大、波動夠、非處置股"""
+    rows = []
+    for a in latest:
+        if (a["vma20"] or 0) < 3000 or a["close"] < 10 or a["vol"] < 2000:
+            continue
+        d = daytrade_info(a)
+        if not d["ok"] or (d["atr_pct"] or 0) < 2.5:
+            continue
+        score = (d["atr_pct"] or 0) * 10 + min(a["vol"] / a["vma20"], 4) * 8 + (d["ratio"] or 0) * 0.3
+        rows.append((score, a, d))
+    rows.sort(key=lambda x: -x[0])
+    out = []
+    for _, a, d in rows[:20]:
+        trend = "偏多" if a["close"] > a["ma5"] > a["ma20"] else "偏空" if a["close"] < a["ma5"] < a["ma20"] else "震盪"
+        out.append({"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
+                    "etf": is_etf(a["code"]), "trend": trend, **d})
+    return out
 
 
 # ---------------------------------------------------------------- 財報、董監、外資持股、重大訊息
@@ -1581,7 +1660,19 @@ def grade(x):
 
 
 def scorecard(a, f, fh, ch, sv, pat):
-    """分析師評分卡: 8 個面向 0~100 分"""
+    """分析師評分卡: 8 個面向 0~100 分（ETF 只看技術面、籌碼、股利）"""
+    if is_etf(a["code"]):
+        clamp = lambda x: max(0, min(100, round(x)))
+        inst = a["f10"] + a["t10"]
+        tech = clamp(50 + (20 if a["close"] > a["ma20"] else -20) + (10 if a.get("ma60") and a["close"] > a["ma60"] else -10) + (pat.get("rs") or 0) * 0.8)
+        chip = clamp(50 + (12 if inst > 0 else -12))
+        d = (f.get("div") or {})
+        items = [["技術面", tech, grade(tech), f"相對大盤 {pat['rs']:+.1f}%" if pat.get("rs") is not None else "趨勢判斷"],
+                 ["籌碼", chip, grade(chip), f"法人 10 日 {inst:+,} 張"]]
+        if d.get("ex"):
+            items.append(["股利", 70, "B", f"即將{d['ex'].get('type', '除息')} {d['ex'].get('date', '')}"])
+        tot = round(sum(x[1] for x in items) / len(items))
+        return {"items": items, "total": tot, "grade": grade(tot)}
     m = f.get("mrev") or {}
     clamp = lambda x: max(0, min(100, round(x)))
     out = []
@@ -2001,7 +2092,7 @@ function toggleWatch(c){let w=getWatch();const on=!w.includes(c);w=on?[...w,c]:w
 
 function render(){
   overview();
-  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
+  const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
   $('#tabs').innerHTML=tabsHTML(tabs);
   if($('#newsslot'))$('#newsslot').innerHTML=newsPanel();
   if(TAB==='all'&&$('#alist')){$('#tabs').innerHTML=tabsHTML(tabs);fillAll();return}
@@ -2013,6 +2104,14 @@ function render(){
     <div class="stocks">${R.potential.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票</div>'}</div>`}
   else if(TAB==='watch'){const w=getWatch();h=`<p class="sub">在上方查詢任一股票並加入自選，會每天自動給出進出場建議。</p>
     <div class="stocks">${w.map(c=>WATCH_DATA[c]?stockCard(WATCH_DATA[c]):'').join('')||'<div class=mut>尚未加入自選股</div>'}</div>`}
+  else if(TAB==='daytrade'){const L=R.daytrade||[];
+    h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 當沖風險非常高：一天內就要買賣完，股價一下跌可能虧很多，還要付手續費和證交稅（當沖證交稅 0.15%）。新手建議先在股票小學堂練習，不要直接上場。</div>
+    <p class="sub">可以現股當沖、成交量大、波動夠的股票（已排除處置股）。價位是用昨天的最高、最低、收盤算出的「樞紐點」：開盤後站上 PP 偏多，突破 R1 可看 R2；跌破 PP 偏空，跌破 S1 可看 S2。</p>
+    <div class="card tblwrap"><table><tr><th>代號</th><th>名稱</th><th>收盤</th><th>漲跌</th><th>波動</th><th>昨日當沖比</th><th>趨勢</th><th>S2</th><th>S1</th><th>PP</th><th>R1</th><th>R2</th><th>當沖</th></tr>
+    ${L.map(r=>{const Lv=LIVE[r.code],p=Lv&&Lv.price?Lv.price:r.close,c=Lv&&Lv.chg_pct!=null?Lv.chg_pct:r.chg_pct;return `<tr class="click" onclick="lookup('${r.code}')"><td>${r.code}</td><td>${r.name}</td><td>${f(p)}</td><td class="${cls(c)}">${sg(c)}${f(c)}%</td><td>${f(r.atr_pct,1)}%</td><td>${r.ratio!=null?f(r.ratio,1)+'%':'-'}</td>
+      <td class="${r.trend==='偏多'?'up':r.trend==='偏空'?'down':''}">${r.trend}</td><td class="down">${f(r.s2)}</td><td class="down">${f(r.s1)}</td><td><b>${f(r.pp)}</b></td><td class="up">${f(r.r1)}</td><td class="up">${f(r.r2)}</td><td>${r.susp?'只能先買後賣':'可雙向'}</td></tr>`}).join('')}</table>
+    ${L.length?'':'<div class="mut" style="padding:10px">今天沒有符合條件的股票</div>'}</div>
+    <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。</div>`}
   else if(TAB==='all'){const inds=[...new Set(R.all.map(r=>r[3]).filter(Boolean))].sort();
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
     <div class="filters"><input id="fq" placeholder="搜尋代號或名稱" value="${AQ}" oninput="AQ=this.value.trim();AN=100;fillAll()">
@@ -2083,7 +2182,7 @@ const li=a=>(a||[]).map(x=>'<li>'+x+'</li>').join('');
 function cardPanel(d){
   const c=d.card;if(!c)return'';
   return `<div class="verdict"><div style="display:flex;align-items:center;gap:12px"><span class="gr bigg g${c.grade}">${c.grade}</span>
-    <div><div class="mut" style="font-size:12px">分析師總評（8 面向加權）</div><b style="font-size:18px">${c.total} 分</b></div></div>
+    <div><div class="mut" style="font-size:12px">分析師總評（${c.items.length} 面向加權）</div><b style="font-size:18px">${c.total} 分</b></div></div>
     <div class="card8">${c.items.map(x=>`<div class="c8"><span>${x[0]}</span><span class="gr g${x[2]}">${x[2]}</span>
       <div><i><b style="width:${x[1]??0}%"></b></i><div class="mut" style="font-size:11.5px;margin-top:2px">${x[3]}</div></div></div>`).join('')}</div></div>`
 }
@@ -2143,6 +2242,13 @@ function peerSection(d){
       <td><span class="vtag ${r[8]||''}">${r[7]}</span></td><td>${r[13]!=null?f(r[13],0):'-'}</td><td>${r[9]!=null?f(r[9],1):'-'}</td><td>${r[10]!=null?f(r[10])+'%':'-'}</td>
       <td class="${cls(r[11])}">${r[11]!=null?f(r[11],1)+'%':'-'}</td><td>${r[12]!=null?f(r[12],1)+'%':'-'}</td><td class="${cls(r[14])}">${r[14]!=null?f(r[14],1)+'%':'-'}</td></tr>`).join('')}</table></div></div>`
 }
+function dtSection(d){
+  const t=d.dt;if(!t)return'';
+  const st=!t.listed?'<b class="down">不可現股當沖</b>':t.dispose?'<b class="down">處置中，當沖受限制</b>':t.susp?'<b>只能先買後賣</b>（暫停先賣後買）':'<b class="up">可以雙向現股當沖</b>';
+  return `<div class="sec"><h3>當沖資訊</h3><div style="font-size:14px">${st}</div>${kv2([['昨日當沖比',t.ratio!=null?f(t.ratio,1)+'%':'-',t.ratio>=35?'c-warn':''],['平均波動',yi(t.atr_pct,'%')],['樞紐 PP',f(t.pp)],
+    ['壓力 R1',f(t.r1),'up'],['壓力 R2',f(t.r2),'up'],['支撐 S1',f(t.s1),'down'],['支撐 S2',f(t.s2),'down']])}
+    <div class="mut" style="font-size:12px;margin-top:6px">樞紐點用昨天的最高、最低、收盤計算：站上 PP 偏多、跌破 PP 偏空。當沖風險很高，新手請先在股票小學堂練習。</div></div>`
+}
 function verdictPanel(d){
   const v=d.sv;if(!v)return'';const ic={ok:'✓',bad:'✗',warn:'!'};
   const desc={'實力股':'基本面紮實、交易正常，股價有業績支撐。','有實力但短線過熱':'公司本身有實力，但近期漲太快或交易過熱，宜等回檔。',
@@ -2150,8 +2256,8 @@ function verdictPanel(d){
     '體質偏弱':'基本面條件不足，暫時沒有明顯炒作，但也缺乏上漲理由。','中性觀察':'實力與風險都不突出，持續觀察。'}[v.verdict]||'';
   return `<div class="verdict"><div><span class="mut">實力 vs 炒作鑑定</span><div class="big"><span class="vtag ${v.vc}" style="font-size:18px">${v.verdict}</span></div>
     <div style="font-size:13px;margin-top:4px">${desc}</div></div>
-    <div class="meter"><span>真實力</span><i><b style="width:${v.strength}%;background:var(--good)"></b></i><span>${v.strength}</span></div>
-    <div class="meter"><span>炒作風險</span><i><b style="width:${v.hype}%;background:var(--bad)"></b></i><span>${v.hype}</span></div>
+    ${v.strength==null?'':`<div class="meter"><span>真實力</span><i><b style="width:${v.strength}%;background:var(--good)"></b></i><span>${v.strength}</span></div>
+    <div class="meter"><span>炒作風險</span><i><b style="width:${v.hype}%;background:var(--bad)"></b></i><span>${v.hype}</span></div>`}
     <ul class="checks">${v.checks.map(c=>`<li><b class="c-${c[0]}">${ic[c[0]]}</b><span>${c[1]}</span></li>`).join('')}</ul></div>`
 }
 function chipSection(d){
@@ -2178,6 +2284,7 @@ function detailHTML(d){
     <div class="summary">${E.summary}</div>${cardPanel(d)}${verdictPanel(d)}</div>
   <div class="sec"><h3>K 線圖（近 60 日）</h3>${kchart(d)}</div>
   ${liveSecHTML(d)}
+  ${dtSection(d)}
   ${stockCard(d)}
   ${(d.news&&d.news.length)?`<div class="sec"><h3>近期新聞</h3><div class="news">${newsItems(d.news)}</div></div>`:''}
   <div class="sec"><h3>分析師觀點</h3>
@@ -2188,11 +2295,8 @@ function detailHTML(d){
     <div id="aibox" class="ai"><button class="b" style="margin-top:8px" onclick="aiReport()">產生 AI 研究報告</button></div></div>`:''}
   ${patSection(d)}
   ${chipSection(d)}
-  ${insiderSection(d)}
-  ${finSection(d)}
-  ${eventSection(d)}
-  ${peerSection(d)}
-  <div class="sec"><h3>公司資料</h3>${kv([['公司全名',P.full||'-'],['產業',F.ind||'-'],['董事長',P.chair||'-'],['總經理',P.gm||'-'],
+  ${d.etf?'':insiderSection(d)+finSection(d)+eventSection(d)+peerSection(d)}
+  ${d.etf?`<div class="sec"><h3>ETF 說明</h3><p style="font-size:13.5px;line-height:1.8">ETF 是「一籃子股票」：買一張就等於同時買了很多家公司，所以沒有單一公司的財報和 EPS。挑 ETF 主要看：追蹤什麼指數、內扣費用、配息和是否有溢價。${/[LR]$/.test(d.code)?'<br><b class="down">這是槓桿或反向型 ETF</b>，每天會重新平衡，長期持有會有耗損，只適合短線。':''}</p></div>`:`<div class="sec"><h3>公司資料</h3>${kv([['公司全名',P.full||'-'],['產業',F.ind||'-'],['董事長',P.chair||'-'],['總經理',P.gm||'-'],
     ['成立日期',P.found||'-'],['上市櫃日期',P.listed||'-'],['資本額',P.cap?f(P.cap)+' 億':'-'],['發行股數',P.shares?f(P.shares)+' 億股':'-'],
     ['英文簡稱',P.en||'-']])}${P.web?`<div style="margin-top:8px;font-size:12px">公司網站：<a href="${P.web}" target="_blank" rel="noopener" style="color:var(--blue)">${P.web}</a></div>`:''}</div>
   <div class="sec"><h3>獲利與評價</h3>${kv([
@@ -2200,7 +2304,7 @@ function detailHTML(d){
     ['營業利益率',yi(F.op_margin,'%')],['稅後淨利率',yi(F.net_margin,'%')],['本益比',yi(F.pe,' 倍')],
     ['同業本益比',yi(F.ind_pe,' 倍')],['股價淨值比',yi(F.pb,' 倍')],['配股後 EPS',F.eps_after_stock!=null?f(F.eps_after_stock)+' 元':'無配股']])}</div>
   ${M?`<div class="sec"><h3>月營收（${M.ym}）</h3>${kv([['單月營收',f(M.rev/1e5)+' 億'],['月增率',yi(M.mom,'%'),cls(M.mom)],['年增率',yi(M.yoy,'%'),cls(M.yoy)],
-    ['今年累計',f(M.cum/1e5)+' 億'],['累計年增',yi(M.cum_yoy,'%'),cls(M.cum_yoy)]])}${M.note?`<div class="mut" style="margin-top:6px;font-size:12px">公司說明：${M.note}</div>`:''}</div>`:''}
+    ['今年累計',f(M.cum/1e5)+' 億'],['累計年增',yi(M.cum_yoy,'%'),cls(M.cum_yoy)]])}${M.note?`<div class="mut" style="margin-top:6px;font-size:12px">公司說明：${M.note}</div>`:''}</div>`:''}`}
   <div class="sec"><h3>股利政策${D.year?`（${D.year} 年度）`:''}</h3>${kv([['現金股利',D.cash!=null?f(D.cash,2)+' 元':'無資料'],['股票股利（配股）',D.stock?f(D.stock,2)+' 元':'無'],
     ['現金殖利率',yi(D.yield,'%')],['盈餘配發率',F.payout!=null?F.payout+'%':'-'],['配股後 EPS',F.eps_after_stock!=null?f(F.eps_after_stock)+' 元':'-'],['除權息參考價',yi(D.ref_price)]])}
     ${D.rows&&D.rows.length?`<div class="tblwrap" style="margin-top:8px"><table><tr><th>期間</th><th>進度</th><th>現金(元)</th><th>配股(元)</th></tr>${D.rows.map(r=>`<tr><td>${r.period}</td><td>${r.status}</td><td>${f(r.cash,2)}</td><td>${f(r.stock,2)}</td></tr>`).join('')}</table></div>`:''}
@@ -2595,7 +2699,7 @@ def build_daily_lesson():
                       "quiz": {"q": f"像{a['name']}這樣被列為注意或處置、又沒有業績支撐的股票，新手應該？", "o": ["趕快追進去", "先不要追，風險很高", "借錢買", "全部押下去"], "a": 1,
                                "e": "交易所會把交易異常的股票列為注意股或處置股，新手最好避開。"}})
     # 3. 大型股跌破月線
-    big = sorted([a for a in latest.values() if a["chg_pct"] <= -2 and a["ma20"] and a["close"] < a["ma20"] <= a["prev"] * 1.05],
+    big = sorted([a for a in latest.values() if not is_etf(a["code"]) and a["chg_pct"] <= -2 and a["ma20"] and a["close"] < a["ma20"] <= a["prev"] * 1.05],
                  key=lambda a: -(a["vma20"] or 0) * a["close"])
     if big:
         a = big[0]
