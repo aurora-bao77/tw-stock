@@ -1447,7 +1447,35 @@ def daytrade_info(a):
          "ratio": round(dtv / a["vol"] * 100, 1) if dtv is not None and a["vol"] else None,
          "atr_pct": round(a["atr"] / c * 100, 2) if c else None,
          "pp": rnd(pp), "r1": rnd(2 * pp - l), "s1": rnd(2 * pp - h), "r2": rnd(pp + (h - l)), "s2": rnd(pp - (h - l))}
+    ma5, ma20 = a.get("ma5"), a.get("ma20")
+    o["trend"] = "偏多" if ma5 and ma20 and c > ma5 > ma20 else "偏空" if ma5 and ma20 and c < ma5 < ma20 else "震盪"
+    o["plan"] = daytrade_plan(o, a.get("atr") or (h - l))
     return o
+
+
+def daytrade_plan(o, atr):
+    """當沖進出場計畫：何時、多少價位進場，停損、停利與最晚出場時間"""
+    if not o["ok"] or not o["pp"]:
+        return None
+    pad = max(atr * 0.3, tick(o["pp"]) * 2)
+    pp, r1, r2, s1, s2 = o["pp"], o["r1"], o["r2"], o["s1"], o["s2"]
+    if o["trend"] == "偏空" and not o["susp"]:
+        p = {"side": "空", "title": "先賣後買（做空）", "entry": rnd(pp, "down"), "stop": rnd(pp + pad, "up"), "t1": s1, "t2": s2,
+             "when": "9:15 以後，股價跌破 PP 而且跌破「開盤前 15 分鐘的最低價」時，先賣出",
+             "skip": "如果 9:15 後股價一直站在 PP 之上，今天不要做空"}
+    elif o["trend"] == "偏多":
+        p = {"side": "多", "title": "先買後賣（做多）", "entry": rnd(pp, "up"), "stop": rnd(pp - pad, "down"), "t1": r1, "t2": r2,
+             "when": "9:15 以後，股價站穩 PP 之上而且突破「開盤前 15 分鐘的最高價」時，買進",
+             "skip": "如果開盤就跌破 PP、或一開盤就大漲超過 R1，今天不要追"}
+    else:
+        p = {"side": "多", "title": "低接（區間來回）", "entry": rnd(s1, "up"), "stop": rnd(s1 - pad, "down"), "t1": pp, "t2": r1,
+             "when": "9:30 以後，股價回到 S1 附近、而且連續幾分鐘不再破底（止跌）時，買進",
+             "skip": "如果股價跌破停損價就不要接；沒有回到 S1 就不要追高"}
+    risk = abs(p["entry"] - p["stop"])
+    p["rr"] = round(abs(p["t1"] - p["entry"]) / risk, 1) if risk else None
+    p["exit"] = "到第一目標先賣一半，剩下的到第二目標或 13:20 前全部出清；碰到停損價馬上出場，不要凹單"
+    p["last"] = "13:20"
+    return p
 
 
 def daytrade_list(latest):
@@ -1464,9 +1492,8 @@ def daytrade_list(latest):
     rows.sort(key=lambda x: -x[0])
     out = []
     for _, a, d in rows[:20]:
-        trend = "偏多" if a["close"] > a["ma5"] > a["ma20"] else "偏空" if a["close"] < a["ma5"] < a["ma20"] else "震盪"
         out.append({"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
-                    "etf": is_nonstock(a["code"]), "trend": trend, **d})
+                    "etf": is_nonstock(a["code"]), **d})
     return out
 
 
@@ -2132,12 +2159,12 @@ function render(){
     <div class="stocks">${w.map(c=>WATCH_DATA[c]?stockCard(WATCH_DATA[c]):'').join('')||'<div class=mut>尚未加入自選股</div>'}</div>`}
   else if(TAB==='daytrade'){const L=R.daytrade||[];
     h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 當沖風險非常高：一天內就要買賣完，股價一下跌可能虧很多，還要付手續費和證交稅（當沖證交稅 0.15%）。新手建議先在股票小學堂練習，不要直接上場。</div>
-    <p class="sub">可以現股當沖、成交量大、波動夠的股票（已排除處置股）。價位是用昨天的最高、最低、收盤算出的「樞紐點」：開盤後站上 PP 偏多，突破 R1 可看 R2；跌破 PP 偏空，跌破 S1 可看 S2。</p>
-    <div class="card tblwrap"><table><tr><th>代號</th><th>名稱</th><th>收盤</th><th>漲跌</th><th>波動</th><th>昨日當沖比</th><th>趨勢</th><th>S2</th><th>S1</th><th>PP</th><th>R1</th><th>R2</th><th>當沖</th></tr>
-    ${L.map(r=>{const Lv=LIVE[r.code],p=Lv&&Lv.price?Lv.price:r.close,c=Lv&&Lv.chg_pct!=null?Lv.chg_pct:r.chg_pct;return `<tr class="click" onclick="lookup('${r.code}')"><td>${r.code}</td><td>${r.name}</td><td>${f(p)}</td><td class="${cls(c)}">${sg(c)}${f(c)}%</td><td>${f(r.atr_pct,1)}%</td><td>${r.ratio!=null?f(r.ratio,1)+'%':'-'}</td>
-      <td class="${r.trend==='偏多'?'up':r.trend==='偏空'?'down':''}">${r.trend}</td><td class="down">${f(r.s2)}</td><td class="down">${f(r.s1)}</td><td><b>${f(r.pp)}</b></td><td class="up">${f(r.r1)}</td><td class="up">${f(r.r2)}</td><td>${r.susp?'只能先買後賣':'可雙向'}</td></tr>`}).join('')}</table>
-    ${L.length?'':'<div class="mut" style="padding:10px">今天沒有符合條件的股票</div>'}</div>
-    <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。</div>`}
+    <p class="sub">可以現股當沖、成交量大、波動夠的股票（已排除處置股）。每檔都列出「幾點、什麼價位進場」、停損、停利和最晚出場時間。價位是用昨天的最高、最低、收盤算出的樞紐點 PP / R1 / R2 / S1 / S2。</p>
+    <div class="stocks">${L.map(r=>`<div class="card click" onclick="lookup('${r.code}')"><div style="display:flex;justify-content:space-between;align-items:center"><b>${r.name} <span class="mut">${r.code}</span></b>
+      <span class="${r.trend==='偏多'?'up':r.trend==='偏空'?'down':''}">${r.trend}</span></div>
+      <div class="mut" style="font-size:12px">昨收 ${f(r.close)}（<span class="${cls(r.chg_pct)}">${sg(r.chg_pct)}${f(r.chg_pct)}%</span>）・波動 ${f(r.atr_pct,1)}%・昨日當沖比 ${r.ratio!=null?f(r.ratio,1)+'%':'-'}・${r.susp?'只能先買後賣':'可雙向'}</div>
+      ${dtPlan(r)}</div>`).join('')||'<div class=mut>今天沒有符合條件的股票</div>'}</div>
+    <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。風報比＝可能賺的價差 ÷ 停損會虧的價差，大於 1.5 比較值得做。以上是依昨天資料算出的參考計畫，不是保證獲利。</div>`}
   else if(TAB==='all'){const inds=[...new Set(R.all.map(r=>r[3]).filter(Boolean))].sort();
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
     <div class="filters"><input id="fq" placeholder="搜尋代號或名稱" value="${AQ}" oninput="AQ=this.value.trim();AN=100;fillAll()">
@@ -2273,7 +2300,32 @@ function dtSection(d){
   const st=!t.listed?'<b class="down">不可現股當沖</b>':t.dispose?'<b class="down">處置中，當沖受限制</b>':t.susp?'<b>只能先買後賣</b>（暫停先賣後買）':'<b class="up">可以雙向現股當沖</b>';
   return `<div class="sec"><h3>當沖資訊</h3><div style="font-size:14px">${st}</div>${kv2([['昨日當沖比',t.ratio!=null?f(t.ratio,1)+'%':'-',t.ratio>=35?'c-warn':''],['平均波動',yi(t.atr_pct,'%')],['樞紐 PP',f(t.pp)],
     ['壓力 R1',f(t.r1),'up'],['壓力 R2',f(t.r2),'up'],['支撐 S1',f(t.s1),'down'],['支撐 S2',f(t.s2),'down']])}
+    ${t.plan?'<h3 style="margin-top:12px">今日當沖計畫</h3>'+dtPlan(Object.assign({code:d.code},t)):''}
     <div class="mut" style="font-size:12px;margin-top:6px">樞紐點用昨天的最高、最低、收盤計算：站上 PP 偏多、跌破 PP 偏空。當沖風險很高，新手請先在股票小學堂練習。</div></div>`
+}
+function dtLive(r,p){
+  const L=LIVE[r.code],n=new Date(),m=n.getHours()*60+n.getMinutes(),wd=n.getDay()>0&&n.getDay()<6;
+  if(!wd||m<8*60+30||m>13*60+35)return `<div class="mut" style="font-size:12px">⏰ 開盤後（9:00～13:30）這裡會顯示即時提示</div>`;
+  if(m<9*60+15)return `<div class="status">⏳ 現在 ${n.getHours()}:${String(n.getMinutes()).padStart(2,'0')}，開盤前 15 分鐘波動最亂，先觀察高低點，9:15 以後再決定</div>`;
+  if(m>=13*60+20)return `<div class="status down">🔔 已經 13:20，手上有當沖部位的請馬上平倉，不要留到收盤</div>`;
+  if(!L||!L.price)return `<div class="mut" style="font-size:12px">（需要 App 或電腦版才有即時價）</div>`;
+  const x=L.price,long=p.side==='多';let t,c='';
+  if(long?x<=p.stop:x>=p.stop){t='❌ 已碰到停損價 '+f(p.stop)+'，有部位要出場；沒部位今天先不做';c='down'}
+  else if(long?x>=p.t2:x<=p.t2){t='🎯 已到第二目標 '+f(p.t2)+'，全部出場';c='up'}
+  else if(long?x>=p.t1:x<=p.t1){t='✅ 已到第一目標 '+f(p.t1)+'，先'+(long?'賣':'回補')+'一半，停損移到進場價';c='up'}
+  else if(long?x>=p.entry:x<=p.entry){const hi=L.h,lo=L.l;t=(long?'👀 站在進場價之上，':'👀 在進場價之下，')+'看有沒有'+(long?'突破今天高點 '+f(hi):'跌破今天低點 '+f(lo))+'，有就可以進場'}
+  else t='⌛ 還沒到進場價 '+f(p.entry)+'，耐心等';
+  return `<div class="status ${c}">即時 ${f(x)}：${t}</div>`
+}
+function dtPlan(r){
+  const p=r.plan;if(!p)return'';const col=p.side==='多'?'up':'down';
+  return `<div style="font-size:13px;margin-top:6px;line-height:1.7">
+    <div><b class="${col}">${p.side==='多'?'📈':'📉'} ${p.title}</b>${p.rr!=null?`　風報比 <b class="${p.rr>=1.5?'up':''}">${f(p.rr,1)}</b>`:''}</div>
+    <div>🕘 <b>何時進場：</b>${p.when}</div>
+    <div>💰 <b>進場價：</b>約 <b>${f(p.entry)}</b>　🛑 <b>停損：</b><b class="down">${f(p.stop)}</b></div>
+    <div>🎯 <b>出場目標：</b>第一 <b class="up">${f(p.t1)}</b>、第二 <b class="up">${f(p.t2)}</b></div>
+    <div>🕐 <b>何時出場：</b>${p.exit}；最晚 <b>${p.last}</b> 一定要${p.side==='多'?'賣出':'買回'}</div>
+    <div class="mut">🚫 ${p.skip}</div>${dtLive(r,p)}</div>`
 }
 function verdictPanel(d){
   const v=d.sv;if(!v)return'';const ic={ok:'✓',bad:'✗',warn:'!'};
