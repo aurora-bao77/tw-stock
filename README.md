@@ -7,6 +7,7 @@
   - Android：用 Chrome 打開 → ⋮ → 加到主畫面（或安裝下方 App）
 - **股票小學堂**：`https://aurora-bao77.github.io/tw-stock/school/`
 - **英文重新出發**：`https://aurora-bao77.github.io/tw-stock/english/`（給想重新學英文的大人：整句學、跟讀、間隔複習）
+  - 「聊天」分頁的 AI 英文夥伴 Emma 用 Claude 回答，需在 Claude App 或 claude.ai 打開才能聊；GitHub 網站版其他功能都能用。
 - **Android App**：安裝 `TwStock.apk`，可看盤中即時五檔，並在背景收到買賣點通知。
 
 ## 自動更新

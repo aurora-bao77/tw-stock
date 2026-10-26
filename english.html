@@ -114,6 +114,29 @@ nav.tabs .in{display:flex;max-width:640px;width:100%}
 .boxlv{font-size:.72rem;color:var(--mut);white-space:nowrap}
 .big-stamp{width:150px;height:150px;margin:8px auto;border-radius:50%;border:5px double var(--sc);color:var(--sc);display:grid;place-items:center;text-align:center;font-family:var(--display);font-weight:800;text-transform:uppercase;letter-spacing:.06em;transform:rotate(-10deg);animation:thump .5s ease-out}
 @keyframes thump{0%{transform:scale(1.6) rotate(-10deg);opacity:.2}70%{transform:scale(.95) rotate(-10deg);opacity:1}100%{transform:scale(1) rotate(-10deg)}}
+/* 聊天 */
+.chatcta{font:inherit;color:var(--ink);text-align:left;cursor:pointer;align-items:flex-start}
+.chatcta:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.chatlog{display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;border-radius:16px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;min-width:0;overflow-wrap:anywhere}
+.msg.ai{align-self:flex-start;background:var(--paper);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg.ai .en{font-size:1.2rem}
+.msg.me{align-self:flex-end;background:var(--accent);color:var(--onacc);border-bottom-right-radius:4px}
+.msg details summary{cursor:pointer}
+.play:disabled{opacity:.6;cursor:default}
+.better{align-self:flex-end;max-width:88%;background:var(--warnbg);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.typing{flex-direction:row;gap:5px;padding:16px}
+.typing span:not(.sr){width:8px;height:8px;border-radius:50%;background:var(--mut);animation:blink 1.2s infinite}
+.typing span:nth-child(2){animation-delay:.2s}.typing span:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.topicrow{flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+.topicrow .chip{white-space:nowrap;flex:none}
+.opt.hint{padding:10px 14px;min-height:0}
+.opt.hint .en{font-size:1rem}
+.sendbar{display:flex;gap:8px;align-items:flex-end}
+.sendbar textarea{flex:1;min-width:0;font:inherit;font-size:16px;border:2px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--paper);color:var(--ink);resize:vertical}
+.sendbar textarea:focus{outline:none;border-color:var(--accent)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 .center{text-align:center}
 .confirm{background:var(--badbg);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
@@ -205,7 +228,7 @@ const IV = [1,2,4,8,16,32,64]; // 複習間隔（天）：在快忘記前再看�
 
 // ===== 進度存在這台手機／電腦 =====
 const KEY = 'english_restart_v1';
-function fresh(){return {onboard:false,known:0,cards:{},done:{},streak:{last:'',n:0},log:{}}}
+function fresh(){return {onboard:false,known:0,cards:{},done:{},streak:{last:'',n:0},log:{},custom:[],chat:null}}
 let S = (()=>{try{const v=JSON.parse(localStorage.getItem(KEY));return v&&v.cards?Object.assign(fresh(),v):fresh()}catch(e){return fresh()}})();
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 const today = ()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
@@ -215,7 +238,7 @@ function touch(){ // 今天有練習：連續天數 +1
   S.streak.n = (S.streak.last===addDays(-1)) ? S.streak.n+1 : 1; S.streak.last=t; save();
 }
 const streakNow = ()=> (S.streak.last===today()||S.streak.last===addDays(-1)) ? S.streak.n : 0;
-const allItems = ()=>LESSONS.flatMap(l=>l.items.map((it,i)=>({...it,id:l.id+'-'+i,lesson:l})));
+const allItems = ()=>LESSONS.flatMap(l=>l.items.map((it,i)=>({...it,id:l.id+'-'+i,lesson:l}))).concat((S.custom||[]).map(c=>({...c,who:'say',lesson:CHATL})));
 const learned = ()=>allItems().filter(it=>S.cards[it.id]);
 const dueList = ()=>learned().filter(it=>S.cards[it.id].due<=today());
 
@@ -241,8 +264,9 @@ let TAB = 'home', RUN = null;
 const TABS = [
  ['home','今天','<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],
  ['lessons','情境課','<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="11" r="3.5"/><path d="M8 17h8"/>'],
+ ['chat','聊天','<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>'],
  ['review','複習','<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>'],
- ['me','我會的句子','<path d="M4 6h16M4 12h16M4 18h10"/>']
+ ['me','我的句子','<path d="M4 6h16M4 12h16M4 18h10"/>']
 ];
 function drawTabs(){
   const n=dueList().length;
@@ -255,7 +279,7 @@ function render(){
   drawTabs();
   if(!S.onboard) return onboard(0);
   if(RUN) return RUN.kind==='lesson'?drawLesson():drawReview();
-  ({home,lessons,review:reviewIntro,me})[TAB]();
+  ({home,lessons,chat,review:reviewIntro,me})[TAB]();
 }
 
 // ===== 第一次打開：先打破「我學不會」的想法 =====
@@ -316,6 +340,7 @@ function home(){
     <h1>${did?'做得好，明天見。':'今天說一句新的英文吧。'}</h1>
     <p>${due?'有句子快要忘記了，先複習最划算。':nl?esc(nl.scene):'你已經能應付 8 種生活情境，繼續複習讓它們變成反射動作。'}</p></div>
   ${cta}
+  <button class="card chatcta" data-tab2="chat"><span class="eyebrow">今日話題 · AI 聊天</span><span class="row" style="justify-content:space-between;flex-wrap:nowrap;width:100%"><span><b>和 Emma 聊「${esc(dayTopic().zh)}」</b><br><span class="small mut">用簡單英文聊 3 句，說錯 Emma 會教你更自然的說法</span></span><span class="en" style="font-size:1.6rem;color:var(--accent)" aria-hidden="true">→</span></span></button>
   <div class="stats">
     <div class="stat"><b>${learned().length}</b><span>會說的句子</span></div>
     <div class="stat"><b>${streakNow()}</b><span>連續天數</span></div>
@@ -500,13 +525,100 @@ function me(){
   const all=learned(), lv=['新學','新學','熟悉','熟悉','穩固','穩固','反射'];
   const days=Object.keys(S.log).length;
   app.innerHTML=`<div><span class="eyebrow">My English</span><h1>你會說 ${all.length} 句英文</h1><p class="mut" style="margin-top:6px">${all.length?`總共練習了 ${days} 天。點喇叭聽一遍，你會發現自己真的都懂。`:'學完第一課，句子就會出現在這裡。'}</p></div>
-  ${LESSONS.filter(l=>l.items.some((_,i)=>S.cards[l.id+'-'+i])).map(l=>`<div class="card"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}</span><h3>${esc(l.zh)}</h3><div class="list">${l.items.map((it,i)=>{const c=S.cards[l.id+'-'+i];if(!c)return'';return `<div class="li"><div class="t"><p class="en">${esc(it.en)}</p><p class="small mut">${esc(it.zh)}</p></div><div class="row" style="flex-wrap:nowrap"><span class="boxlv">${lv[c.box]}</span><button class="play" data-say="${esc(it.en)}" aria-label="播放 ${esc(it.en)}">${ICON_PLAY}</button></div></div>`}).join('')}</div></div>`).join('')}
+  ${[...LESSONS,{...CHATL,items:S.custom||[]}].filter(l=>l.items.some((it,i)=>S.cards[it.id||l.id+'-'+i])).map(l=>`<div class="card"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}</span><h3>${esc(l.zh)}</h3><div class="list">${l.items.map((it,i)=>{const c=S.cards[it.id||l.id+'-'+i];if(!c)return'';return `<div class="li"><div class="t"><p class="en">${esc(it.en)}</p><p class="small mut">${esc(it.zh)}</p></div><div class="row" style="flex-wrap:nowrap"><span class="boxlv">${lv[c.box]}</span><button class="play" data-say="${esc(it.en)}" aria-label="播放 ${esc(it.en)}">${ICON_PLAY}</button></div></div>`}).join('')}</div></div>`).join('')}
   ${all.length?'':`<button class="btn wide" data-lesson="${(nextLesson()||LESSONS[0]).id}">去上第一課</button>`}
   <div class="card"><h3>設定</h3><p class="small mut">進度只存在這台裝置的瀏覽器裡。換手機或清除瀏覽器資料後會重新開始。</p>
   ${CONFIRM?`<div class="confirm"><p><b>確定要清除全部進度嗎？</b>護照章和學過的句子都會消失，無法復原。</p><div class="row"><button class="btn ghost" id="no">取消</button><button class="btn" style="background:var(--bad);color:#fff" id="yes">清除</button></div></div>`:`<button class="btn ghost" id="reset">清除進度重新開始</button>`}</div>`;
   bindCommon();
   if(CONFIRM){$('#no').onclick=()=>{CONFIRM=false;me()};$('#yes').onclick=()=>{CONFIRM=false;S=fresh();OB={pick:new Set()};save();go('home')}}
   else $('#reset').onclick=()=>{CONFIRM=true;me()};
+}
+
+// ===== AI 聊天夥伴 Emma：用簡單英文聊天，順便幫你改句子 =====
+const TOPICS=[
+ {id:'free',zh:'隨便聊聊',en:'Free talk',open:"Hi! I'm Emma. How's your day going?",ozh:'嗨！我是 Emma。你今天過得怎麼樣？',hints:[["It's good, thanks.",'還不錯，謝謝。'],["I'm a little tired.",'我有點累。'],["It's busy today.",'今天很忙。']]},
+ {id:'food',zh:'今天吃了什麼',en:'Food',open:"Hi! I'm Emma. What did you eat today?",ozh:'嗨！我是 Emma。你今天吃了什麼？',hints:[['I had noodles.','我吃了麵。'],['I had rice and chicken.','我吃了雞肉飯。'],["I didn't eat breakfast.",'我沒吃早餐。']]},
+ {id:'weekend',zh:'週末計畫',en:'Weekend',open:"Hi! I'm Emma. Do you have plans for the weekend?",ozh:'嗨！我是 Emma。你週末有什麼計畫嗎？',hints:[['I want to rest at home.','我想在家休息。'],["I'm going to see my family.",'我要去看家人。'],['Not yet. Any ideas?','還沒，有什麼建議嗎？']]},
+ {id:'work',zh:'工作與生活',en:'Work',open:"Hi! I'm Emma. What do you do?",ozh:'嗨！我是 Emma。你做什麼工作？',hints:[['I work in sales.','我做業務。'],["I'm a teacher.",'我是老師。'],['I work at home.','我在家工作。']]},
+ {id:'travel',zh:'想去旅行的地方',en:'Travel',open:"Hi! I'm Emma. Where do you want to travel?",ozh:'嗨！我是 Emma。你想去哪裡旅行？',hints:[['I want to go to Japan.','我想去日本。'],['I like the beach.','我喜歡海邊。'],["I don't know. Where do you like?",'不知道耶，你喜歡哪裡？']]},
+ {id:'hobby',zh:'興趣嗜好',en:'Hobbies',open:"Hi! I'm Emma. What do you like to do in your free time?",ozh:'嗨！我是 Emma。你空閒時喜歡做什麼？',hints:[['I like watching movies.','我喜歡看電影。'],['I like to walk.','我喜歡散步。'],['I play with my dog.','我跟我的狗玩。']]},
+ {id:'cafe',zh:'角色扮演：咖啡店',en:'Role-play: Café',role:'You are a friendly barista at a café, and the learner is your customer. Stay in the role.',open:"Hi there! Welcome to Emma's Café. What can I get for you?",ozh:'嗨！歡迎光臨 Emma 咖啡店。想點什麼呢？',hints:[['Can I get a latte, please?','可以給我一杯拿鐵嗎？'],["What's good here?",'這裡什麼好喝？'],["I'm just looking, thanks.",'我先看看，謝謝。']]},
+ {id:'shop',zh:'角色扮演：買衣服',en:'Role-play: Shopping',role:'You are a helpful shop assistant in a clothing store, and the learner is your customer. Stay in the role.',open:'Hello! Can I help you find something?',ozh:'哈囉！需要幫你找什麼嗎？',hints:[["I'm just looking, thanks.",'我只是看看，謝謝。'],['Do you have this in black?','這個有黑色的嗎？'],['How much is this?','這個多少錢？']]}
+];
+const dayTopic=()=>{const d=new Date();return TOPICS[(d.getFullYear()*372+d.getMonth()*31+d.getDate())%TOPICS.length]};
+const CHATL={id:'chat',en:'From Chat',zh:'聊天收藏',sc:'--st2'};
+// sample：在 Claude 裡打開時才有；undefined=還在連線、null=這裡不能用
+let SAMPLE;
+(window.claude&&claude.use?claude.use('sample'):Promise.resolve(null)).then(s=>{SAMPLE=s||null},()=>{SAMPLE=null}).then(()=>{if(TAB==='chat'&&!RUN&&S.onboard)chat()});
+let CHAT_BUSY=false,CHAT_ERR='',CHAT_OFF=false,DRAFT='';
+function chatState(){
+  if(!S.chat||!TOPICS.find(t=>t.id===S.chat.topic)) newChat(dayTopic().id);
+  return S.chat;
+}
+function newChat(id){const t=TOPICS.find(x=>x.id===id);S.chat={topic:id,msgs:[{role:'ai',en:t.open,zh:t.ozh,hints:t.hints.map(([en,zh])=>({en,zh}))}]};CHAT_ERR='';save()}
+function rules(t){return `You are Emma, a warm, patient English conversation partner for a Taiwanese adult who is a BEGINNER (CEFR A1-A2). They are restarting English after years of feeling they "can't learn it", so confidence matters more than perfection.
+Topic: ${t.en} (${t.zh}). ${t.role||'You are a friendly new friend chatting casually.'}
+How to reply:
+- Very simple everyday words, short sentences. 1-2 sentences, at most 25 words.
+- React to what they said like a real person, then end with ONE easy question so they can keep talking.
+- Encourage, never lecture. No grammar terms.
+- If the learner writes Chinese or mixes in Chinese, understand it, reply in English, and put the English way to say what they meant in "better".
+- If their English has a real mistake or sounds unnatural, put a natural version in "better" and a short kind explanation in Traditional Chinese (Taiwan) in "fix" (max 30 characters). Ignore capitals, punctuation and tiny slips. If it is fine, both are "".
+Reply with only a JSON object, no other text:
+{"reply":"your English reply","zh":"Traditional Chinese translation of your reply","better":"","better_zh":"Traditional Chinese meaning of better, or empty","fix":"","hints":[{"en":"something simple the learner could say next, max 8 words","zh":"its Traditional Chinese"}]}
+Give exactly 3 hints.`}
+async function sendChat(text){
+  const c=chatState(),t=TOPICS.find(x=>x.id===c.topic);
+  if(text){c.msgs.push({role:'me',text});DRAFT='';const i=$('#say');if(i)i.value='';touch();S.log[today()]=(S.log[today()]||0)+1;save()}
+  CHAT_BUSY=true;CHAT_ERR='';chat();
+  const turns=[{role:'user',content:rules(t)},...c.msgs.slice(-16).map(m=>m.role==='ai'?{role:'assistant',content:m.en}:{role:'user',content:m.text})];
+  if(turns[1]&&turns[1].role==='user')turns.splice(1,0,{role:'assistant',content:t.open});
+  try{
+    const r=await SAMPLE.json(turns,{modelTier:'quick',cache:false});
+    if(!r||typeof r.reply!=='string'||!r.reply.trim())throw{code:'invalid_json'};
+    const last=c.msgs[c.msgs.length-1];
+    if(last&&last.role==='me'){last.better=String(r.better||'').trim();last.fix=String(r.fix||'').trim();last.bzh=String(r.better_zh||'').trim();if(norm(last.better)===norm(last.text))last.better=''}
+    c.msgs.push({role:'ai',en:r.reply.trim(),zh:String(r.zh||''),hints:(Array.isArray(r.hints)?r.hints:[]).filter(h=>h&&h.en).slice(0,3).map(h=>({en:String(h.en),zh:String(h.zh||'')}))});
+    if(c.msgs.length>60)c.msgs=c.msgs.slice(-60);
+    save();speak(r.reply);
+  }catch(e){
+    const code=e&&e.code;
+    if(['not_granted','sampling_disabled','not_declared','capability_disabled','capability_removed'].includes(code))CHAT_OFF=true;
+    else CHAT_ERR=code==='rate_limited'?'今天聊太多了，休息一下再試。':code==='refused'?'Emma 沒辦法回這句，換個說法試試看。':code==='session_expired'?'登入過期了，請重新登入 Claude 後再試。':'連線中斷了，按「再送一次」。';
+  }
+  CHAT_BUSY=false;if(TAB==='chat'&&!RUN)chat();
+}
+function saveCard(en,zh){
+  S.custom=S.custom||[];
+  if(allItems().some(it=>norm(it.en)===norm(en)))return;
+  const id='c'+Date.now();S.custom.push({id,en,zh:zh||'（聊天中學到的句子）'});S.cards[id]={box:0,due:addDays(1)};save();
+}
+const isSaved=en=>allItems().some(it=>S.cards[it.id]&&norm(it.en)===norm(en));
+function chat(){
+  if(TAB!=='chat'||RUN)return;
+  const c=chatState(),t=TOPICS.find(x=>x.id===c.topic),today_=dayTopic();
+  const inp=$('#say');if(inp)DRAFT=inp.value;
+  const off=CHAT_OFF||SAMPLE===null, wait=SAMPLE===undefined;
+  const last=c.msgs[c.msgs.length-1];
+  const bubble=(m,i)=>m.role==='ai'?`<div class="msg ai"><p class="en">${esc(m.en)}</p>${m.zh?`<details><summary class="small mut">看中文</summary><p class="small">${esc(m.zh)}</p></details>`:''}
+      <div class="row"><button class="play" data-say="${esc(m.en)}" aria-label="播放">${ICON_PLAY}</button><button class="play" data-save="${i}" ${isSaved(m.en)?'disabled':''}>${isSaved(m.en)?'已加入複習':'＋加入複習'}</button></div></div>`
+    :`<div class="msg me"><p>${esc(m.text)}</p></div>${m.better?`<div class="better"><span class="eyebrow">更自然的說法</span><p class="en" style="font-size:1.1rem">${esc(m.better)}</p>${m.fix?`<p class="small mut">${esc(m.fix)}</p>`:''}<div class="row"><button class="play" data-say="${esc(m.better)}" aria-label="播放">${ICON_PLAY}</button><button class="play" data-saveb="${i}" ${isSaved(m.better)?'disabled':''}>${isSaved(m.better)?'已加入複習':'＋加入複習'}</button></div></div>`:''}`;
+  app.innerHTML=`<div class="row" style="justify-content:space-between;flex-wrap:nowrap"><div style="min-width:0"><span class="eyebrow">AI 英文聊天 · ${esc(t.zh)}</span><h1>和 Emma 用英文聊天</h1></div></div>
+  <div class="card" style="gap:8px"><p class="small mut">換話題${t.id===today_.id?'':'（今日話題：'+esc(today_.zh)+'）'}</p><div class="swaps topicrow" id="topics">${TOPICS.map(x=>`<button class="chip" data-t="${x.id}" aria-pressed="${x.id===t.id}">${esc(x.zh)}${x.id===today_.id?' ★':''}</button>`).join('')}</div></div>
+  ${off?`<div class="card"><h3>AI 聊天在這裡不能用</h3><p class="mut">${CHAT_OFF?'這個頁面沒有被允許使用 Claude。重新打開頁面時可以再選一次「允許」。':'Emma 是用 Claude 回答的，需要在 Claude App 或 claude.ai 裡打開這個程式才能聊天。其他功能都可以正常使用。'}</p></div>`:''}
+  <div class="chatlog" id="log">${c.msgs.map(bubble).join('')}${CHAT_BUSY?'<div class="msg ai typing"><span></span><span></span><span></span><span class="sr">Emma 正在輸入</span></div>':''}</div>
+  ${CHAT_ERR?`<div class="fb no"><p>${esc(CHAT_ERR)}</p>${last&&last.role==='me'?'<button class="btn ghost" id="retry">再送一次</button>':''}</div>`:''}
+  ${!off&&!CHAT_BUSY&&last&&last.role==='ai'&&last.hints&&last.hints.length?`<div><p class="small mut" style="margin-bottom:6px">不知道說什麼？點一下放進輸入框：</p><div class="opts">${last.hints.map((h,k)=>`<button class="opt hint" data-h="${k}"><span class="en">${esc(h.en)}</span> <span class="small mut">${esc(h.zh)}</span></button>`).join('')}</div></div>`:''}
+  <form class="sendbar" id="sendf"><label class="sr" for="say">用英文回覆 Emma</label><textarea id="say" rows="2" placeholder="${wait?'連線中…':'用英文回覆，不會的字可以打中文'}" ${off||wait?'disabled':''}>${esc(DRAFT)}</textarea><button class="btn" id="send" ${off||wait||CHAT_BUSY?'disabled':''}>送出</button></form>
+  <p class="small mut">小技巧：用手機鍵盤的麥克風說英文，就能練口說。說錯沒關係，Emma 會給你更自然的說法。</p>`;
+  $('#topics').onclick=e=>{const b=e.target.closest('[data-t]');if(!b||CHAT_BUSY)return;newChat(b.dataset.t);chat()};
+  $('#sendf').onsubmit=e=>{e.preventDefault();const v=$('#say').value.trim();if(!v||CHAT_BUSY||off||wait)return;sendChat(v)};
+  $('#say').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('#sendf').requestSubmit()}};
+  const r=$('#retry');if(r)r.onclick=()=>sendChat();
+  app.querySelectorAll('[data-h]').forEach(b=>b.onclick=()=>{const s=$('#say');s.value=last.hints[+b.dataset.h].en;s.focus()});
+  app.querySelectorAll('[data-save]').forEach(b=>b.onclick=()=>{const m=c.msgs[+b.dataset.save];saveCard(m.en,m.zh);chat()});
+  app.querySelectorAll('[data-saveb]').forEach(b=>b.onclick=()=>{const m=c.msgs[+b.dataset.saveb];saveCard(m.better,m.bzh||(/[一-鿿]/.test(m.text)?m.text:''));chat()});
+  const lg=$('#log');if(lg&&lg.lastElementChild&&c.msgs.length>1)lg.lastElementChild.scrollIntoView({block:'nearest'});
 }
 
 render();
