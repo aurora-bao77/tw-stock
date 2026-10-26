@@ -1,0 +1,514 @@
+<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#1f3a5f"><link rel="apple-touch-icon" href="../icon-192.png"><style>[hidden]{display:none!important}body{margin:0}</style></head><body><title>英文重新出發</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+/* 護照旅行：每個情境是一個目的地，學完蓋一個章；英文句子是主角，用大字顯示 */
+:root{
+  --bg:#f2f5f3;--paper:#ffffff;--ink:#1c2742;--mut:#5b6680;--line:#dce2e4;--soft:#e9efed;
+  --cover:#1f3a5f;--oncover:#f4f1e6;--accent:#0e7c86;--onacc:#ffffff;--accsoft:#dcefef;
+  --st1:#0e7c86;--st2:#8e3b7a;--st3:#b7790f;--st4:#2f5fb3;
+  --good:#1d8a52;--goodbg:#e1f4ea;--bad:#c2413b;--badbg:#fbe7e5;--warnbg:#fdf3dc;
+  --display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
+  --body:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f141d;--paper:#172030;--ink:#e8ecf4;--mut:#9aa5bc;--line:#283347;--soft:#1d2738;
+  --cover:#a9c6e8;--oncover:#10192a;--accent:#45c2c9;--onacc:#06272a;--accsoft:#173a40;
+  --st1:#45c2c9;--st2:#d98bc7;--st3:#e2b44f;--st4:#8fb1f0;
+  --good:#5bd08f;--goodbg:#173527;--bad:#f08a83;--badbg:#3a1d1c;--warnbg:#3a3018;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f141d;--paper:#172030;--ink:#e8ecf4;--mut:#9aa5bc;--line:#283347;--soft:#1d2738;
+  --cover:#a9c6e8;--oncover:#10192a;--accent:#45c2c9;--onacc:#06272a;--accsoft:#173a40;
+  --st1:#45c2c9;--st2:#d98bc7;--st3:#e2b44f;--st4:#8fb1f0;
+  --good:#5bd08f;--goodbg:#173527;--bad:#f08a83;--badbg:#3a1d1c;--warnbg:#3a3018;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--ink)}
+body{font:16px/1.65 var(--body);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-bottom:calc(84px + env(safe-area-inset-bottom,0px))}
+.wrap{max-width:640px;margin:0 auto;padding-block:20px;display:flex;flex-direction:column;gap:18px}
+h1,h2,h3{margin:0;text-wrap:balance;line-height:1.3}
+h1{font-size:1.55rem}h2{font-size:1.25rem}h3{font-size:1.05rem}
+p{margin:0}
+.mut{color:var(--mut)}
+.small{font-size:.875rem}
+.en{font-family:var(--display);font-weight:700;letter-spacing:-.01em;line-height:1.2}
+.eyebrow{font-size:.75rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut);font-family:var(--display);font-weight:700}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.btn{font:inherit;font-weight:700;border:0;border-radius:12px;padding:13px 18px;background:var(--accent);color:var(--onacc);cursor:pointer;min-height:48px}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn.wide{width:100%}
+.btn:disabled{opacity:.45;cursor:default}
+.btn:focus-visible,.chip:focus-visible,.tile:focus-visible,.opt:focus-visible,.tab:focus-visible,.play:focus-visible,.stamp:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.play{font:inherit;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--soft);color:var(--ink);border-radius:999px;padding:8px 14px;cursor:pointer;font-size:.9rem;font-weight:500}
+.play svg{width:16px;height:16px;fill:currentColor}
+/* 封面 */
+.cover{background:var(--cover);color:var(--oncover);border-radius:16px;padding:22px 20px;display:flex;flex-direction:column;gap:10px}
+.cover .eyebrow{color:var(--oncover);opacity:.75}
+.cover h1{font-family:var(--display);font-size:1.9rem;font-weight:800}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.stat{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center}
+.stat b{display:block;font-family:var(--display);font-size:1.7rem;line-height:1.1;font-variant-numeric:tabular-nums}
+.stat span{font-size:.8rem;color:var(--mut)}
+/* 護照章 */
+.stamps{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media (max-width:460px){.stamps{grid-template-columns:repeat(2,1fr)}}
+.stamp{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 8px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;text-align:center}
+.seal{width:76px;height:76px;border-radius:50%;border:2px dashed var(--line);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:.62rem;letter-spacing:.04em;text-transform:uppercase;color:var(--mut);line-height:1.15;padding:6px;overflow-wrap:anywhere}
+.stamp.got .seal{border:3px double var(--sc);color:var(--sc);transform:rotate(-8deg)}
+.stamp .zh{font-size:.85rem;font-weight:700}
+.stamp .cnt{font-size:.75rem;color:var(--mut)}
+/* 底部分頁 */
+nav.tabs{position:fixed;left:0;right:0;bottom:0;background:var(--paper);border-top:1px solid var(--line);display:flex;justify-content:center;padding:6px max(8px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(8px,env(safe-area-inset-left,0px));z-index:5}
+nav.tabs .in{display:flex;max-width:640px;width:100%}
+.tab{flex:1;font:inherit;background:none;border:0;color:var(--mut);padding:6px 4px;border-radius:10px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:.78rem;position:relative}
+.tab svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.tab[aria-current="page"]{color:var(--accent);font-weight:700}
+.badge{position:absolute;top:2px;left:calc(50% + 6px);background:var(--bad);color:#fff;border-radius:999px;font-size:.68rem;min-width:18px;height:18px;padding:0 5px;display:grid;place-items:center;font-weight:700}
+/* 課程 */
+.lessonhead{display:flex;align-items:center;gap:12px}
+.x{font:inherit;background:none;border:0;color:var(--mut);font-size:1.5rem;cursor:pointer;padding:4px 8px;line-height:1}
+.prog{flex:1;height:10px;background:var(--soft);border-radius:999px;overflow:hidden}
+.prog i{display:block;height:100%;background:var(--accent);border-radius:999px;transition:width .3s}
+.phrase{font-size:2rem}
+@media (max-width:420px){.phrase{font-size:1.65rem}}
+.who{display:inline-block;font-size:.75rem;font-weight:700;padding:2px 10px;border-radius:999px;background:var(--accsoft);color:var(--accent);align-self:flex-start}
+.who.hear{background:var(--warnbg);color:var(--st3)}
+.tip{background:var(--soft);border-radius:10px;padding:12px 14px;font-size:.92rem}
+.tip b{color:var(--accent)}
+.swaps{display:flex;flex-wrap:wrap;gap:8px}
+.chip{font:inherit;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:999px;padding:6px 14px;cursor:pointer;font-family:var(--display);font-weight:500}
+.chip[aria-pressed="true"]{background:var(--accent);color:var(--onacc);border-color:var(--accent)}
+.dots{display:flex;gap:8px}
+.dots i{width:14px;height:14px;border-radius:50%;border:2px solid var(--accent)}
+.dots i.on{background:var(--accent)}
+.opts{display:flex;flex-direction:column;gap:10px}
+.opt{font:inherit;text-align:left;border:2px solid var(--line);background:var(--paper);color:var(--ink);border-radius:12px;padding:14px 16px;cursor:pointer;min-height:52px}
+.opt.en{font-size:1.1rem}
+.opt.right{border-color:var(--good);background:var(--goodbg)}
+.opt.wrong{border-color:var(--bad);background:var(--badbg)}
+.answer{min-height:60px;border-bottom:2px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;padding-bottom:10px;align-content:flex-start}
+.pool{display:flex;flex-wrap:wrap;gap:8px}
+.tile{font:inherit;font-family:var(--display);font-weight:700;font-size:1.05rem;border:1px solid var(--line);border-bottom-width:3px;background:var(--paper);color:var(--ink);border-radius:10px;padding:8px 12px;cursor:pointer}
+.tile.used{visibility:hidden}
+.fb{border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.fb.ok{background:var(--goodbg)}
+.fb.no{background:var(--badbg)}
+.fb h3{color:var(--good)}
+.fb.no h3{color:var(--bad)}
+.rate{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.rate .btn{padding:12px 6px;font-size:.92rem}
+.rate .r0{background:var(--badbg);color:var(--bad)}
+.rate .r1{background:var(--warnbg);color:var(--st3)}
+.rate .r2{background:var(--goodbg);color:var(--good)}
+.loan{display:flex;flex-wrap:wrap;gap:8px}
+.why{display:flex;flex-direction:column;gap:14px}
+.why .item{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:start}
+.why .n{font-family:var(--display);font-weight:800;color:var(--accent);font-size:1.3rem;line-height:1.2}
+.list{display:flex;flex-direction:column}
+.list .li{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line)}
+.list .li:first-child{border-top:0}
+.li .t{min-width:0}
+.li .t .en{font-size:1.05rem}
+.boxlv{font-size:.72rem;color:var(--mut);white-space:nowrap}
+.big-stamp{width:150px;height:150px;margin:8px auto;border-radius:50%;border:5px double var(--sc);color:var(--sc);display:grid;place-items:center;text-align:center;font-family:var(--display);font-weight:800;text-transform:uppercase;letter-spacing:.06em;transform:rotate(-10deg);animation:thump .5s ease-out}
+@keyframes thump{0%{transform:scale(1.6) rotate(-10deg);opacity:.2}70%{transform:scale(.95) rotate(-10deg);opacity:1}100%{transform:scale(1) rotate(-10deg)}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+.center{text-align:center}
+.confirm{background:var(--badbg);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px}
+</style>
+
+<div class="wrap" id="app"></div>
+<nav class="tabs" aria-label="主選單"><div class="in" id="tabs"></div></nav>
+
+<script>
+// ===== 課程內容：8 個生活情境，每句都是「整句」學 =====
+// who: say=你會說的、hear=你會聽到的；swap=可替換的部分（第一個就是句子裡原本的字）；reply=聽到後怎麼回
+const LESSONS = [
+ {id:'cafe', en:'Coffee Shop', zh:'咖啡店點餐', sc:'--st1', scene:'你走進一間國外的咖啡店，櫃台店員笑著看你。不用緊張，這 7 句就能從點餐到付款全部搞定。', items:[
+  {en:'Can I get a latte, please?', zh:'可以給我一杯拿鐵嗎？', who:'say', swap:['a latte','a black coffee','an iced tea','a croissant'], tip:'<b>Can I get ___?</b> 是點任何東西的萬用句。換掉後面的字，就能點全世界的食物。'},
+  {en:'For here or to go?', zh:'內用還是外帶？', who:'hear', reply:'To go, please.', tip:'店員念很快，聽起來像「佛黑爾 or 土狗」。聽到 <b>here</b> 和 <b>go</b> 就知道在問什麼。'},
+  {en:'To go, please.', zh:'外帶，謝謝。', who:'say', swap:['To go','For here'], tip:'回答只要說關鍵字加 <b>please</b>，不用講完整句子，母語人士也這樣說。'},
+  {en:'What size?', zh:'要什麼尺寸？', who:'hear', reply:'Medium, please.', tip:'<b>size</b> 你早就會了，就是衣服上的「尺寸」。'},
+  {en:'Medium, please.', zh:'中杯，謝謝。', who:'say', swap:['Medium','Small','Large'], tip:'<b>Small / Medium / Large</b> 就是 S、M、L，你在台灣買衣服天天看到。'},
+  {en:'Can I pay by card?', zh:'可以刷卡嗎？', who:'say', swap:['by card','in cash','with my phone'], tip:'又是 <b>Can I ___?</b>！同一個開頭，換個動作就是新句子。'},
+  {en:"That's all, thanks.", zh:'這樣就好，謝謝。', who:'say', tip:'店員問 <b>Anything else?</b>（還需要什麼嗎？）時，用這句收尾。'}
+ ]},
+ {id:'hello', en:'Small Talk', zh:'打招呼聊天', sc:'--st2', scene:'第一次見到外國同事或朋友。開頭這幾句說得順，對方就會覺得你英文不錯。',items:[
+  {en:'Hi, how are you?', zh:'嗨，你好嗎？', who:'say', reply:"I'm good, thanks. And you?", tip:'這是打招呼，不是真的在問近況，像中文的「吃飽沒」。'},
+  {en:"I'm good, thanks. And you?", zh:'我很好，謝謝。你呢？', who:'say', tip:'課本教的 <b>I\'m fine, thank you</b> 也對，但 <b>I\'m good</b> 比較像真人在講話。'},
+  {en:'Nice to meet you.', zh:'很高興認識你。', who:'say', tip:'第一次見面才說 <b>meet</b>。下次再見面改說 <b>Nice to see you.</b>'},
+  {en:"I'm from Taiwan.", zh:'我來自台灣。', who:'say', swap:['Taiwan','Taipei','Kaohsiung'], tip:'<b>I\'m from ___.</b> 後面放地名就好。'},
+  {en:'What do you do?', zh:'你做什麼工作？', who:'hear', reply:'I work in sales.', tip:'不是問「你在做什麼」，是問職業。聽到它就說你的工作。'},
+  {en:'I work in sales.', zh:'我做業務。', who:'say', swap:['sales','a hospital','IT','a school'], tip:'<b>I work in ___.</b> 後面放行業或地點，不用想職稱怎麼說。'},
+  {en:'See you later!', zh:'待會見／再見！', who:'say', tip:'不一定真的待會會見面，就是輕鬆的「掰掰」。'}
+ ]},
+ {id:'way', en:'Directions', zh:'問路', sc:'--st4', scene:'你在國外迷路了，手機剛好沒電。先學怎麼問，再學聽懂對方指的方向。',items:[
+  {en:'Excuse me, where is the station?', zh:'不好意思，車站在哪裡？', who:'say', swap:['the station','the restroom','the exit','the bus stop'], tip:'<b>Excuse me</b> 先開口讓對方停下來，再問 <b>where is ___?</b>'},
+  {en:'Is it far from here?', zh:'離這裡遠嗎？', who:'say', tip:'只要記 <b>far</b>（遠）。對方回 <b>No, it\'s close</b> 就是很近。'},
+  {en:'Go straight.', zh:'直走。', who:'hear', tip:'<b>straight</b> 聽起來像「斯崔」。手勢通常會一起比，別緊張。'},
+  {en:'Turn left at the corner.', zh:'在轉角左轉。', who:'hear', swap:['left','right'], tip:'<b>left</b> 左、<b>right</b> 右。記法：伸出左手，拇指和食指會比出 L。'},
+  {en:"It's on your right.", zh:'在你的右手邊。', who:'hear', swap:['right','left'], tip:'<b>on your right</b>＝在你右邊。'},
+  {en:'Could you say that again, please?', zh:'可以再說一次嗎？', who:'say', tip:'沒聽懂很正常，母語人士也常這樣問。這句會救你很多次。'},
+  {en:'Thank you so much!', zh:'真的很謝謝你！', who:'say', tip:'加 <b>so much</b> 聽起來更真心。'}
+ ]},
+ {id:'food', en:'Restaurant', zh:'餐廳吃飯', sc:'--st3', scene:'晚餐時間，你和朋友兩個人走進餐廳。從帶位、點菜到結帳，一次學起來。',items:[
+  {en:'A table for two, please.', zh:'兩位，謝謝。', who:'say', swap:['two','one','four'], tip:'進門只要說人數。數字你都會，直接換。'},
+  {en:'Can I see the menu?', zh:'可以看菜單嗎？', who:'say', tip:'<b>menu</b> 你已經會了！又是 <b>Can I ___?</b> 開頭。'},
+  {en:"I'd like the chicken, please.", zh:'我要雞肉，謝謝。', who:'say', swap:['the chicken','the beef','the fish','this one'], tip:'<b>I\'d like ___.</b> 比 I want 有禮貌。看不懂菜名就指著菜單說 <b>this one</b>。'},
+  {en:'Is it spicy?', zh:'這會辣嗎？', who:'say', tip:'<b>spicy</b> 辣。台灣人很常需要這句！'},
+  {en:'No ice, please.', zh:'不要冰塊，謝謝。', who:'say', swap:['No ice','Less sugar','No onions'], tip:'<b>No ___, please.</b> 想去掉什麼就放什麼。'},
+  {en:'Can we have the check, please?', zh:'可以結帳嗎？', who:'say', tip:'<b>check</b> 是帳單（英國人說 bill）。也可以在空中比寫字的手勢。'},
+  {en:'It was delicious.', zh:'很好吃。', who:'say', tip:'<b>delicious</b> 念「低里修斯」，重音在中間 li。'}
+ ]},
+ {id:'shop', en:'Shopping', zh:'逛街購物', sc:'--st2', scene:'你在國外的服飾店看到喜歡的外套。從「我只是看看」到結帳，都在這裡。',items:[
+  {en:"I'm just looking, thanks.", zh:'我只是看看，謝謝。', who:'say', tip:'店員問 <b>Can I help you?</b> 時的完美回答，不會尷尬。'},
+  {en:'How much is this?', zh:'這個多少錢？', who:'say', tip:'<b>How much</b> 問價錢。手拿著東西說就好。'},
+  {en:'Do you have this in a smaller size?', zh:'這個有小一點的尺寸嗎？', who:'say', swap:['a smaller size','a bigger size','black','blue'], tip:'<b>Do you have this in ___?</b> 換尺寸或顏色都能用。'},
+  {en:'Can I try it on?', zh:'我可以試穿嗎？', who:'say', tip:'<b>try on</b> 試穿。三個字連起來念「趣萊停」。'},
+  {en:"It's a little expensive.", zh:'有點貴。', who:'say', tip:'<b>a little</b>（有一點）讓語氣變客氣，殺價前先說這句。'},
+  {en:"I'll take it.", zh:'我要買這個。', who:'say', tip:'決定買了就說這句，店員馬上懂。'},
+  {en:'Do you need a bag?', zh:'需要袋子嗎？', who:'hear', reply:'No, thanks.', tip:'聽到 <b>bag</b> 就是問袋子。不要就說 <b>No, thanks.</b>'}
+ ]},
+ {id:'trip', en:'Hotel & Airport', zh:'機場與飯店', sc:'--st4', scene:'終於出國旅行！從機場到飯店入住，這些句子讓你一路順暢。',items:[
+  {en:"I'm here on vacation.", zh:'我是來度假的。', who:'say', swap:['on vacation','on business'], tip:'海關問 <b>What\'s the purpose of your visit?</b>（來做什麼？）就回這句。'},
+  {en:"Here's my passport.", zh:'這是我的護照。', who:'say', tip:'<b>Here\'s ___.</b> 遞東西給別人時說，護照、票、信用卡都行。'},
+  {en:'Where is gate 12?', zh:'12 號登機門在哪？', who:'say', swap:['gate 12','the taxi stand','baggage claim'], tip:'又是 <b>Where is ___?</b>，問路那課學過了！'},
+  {en:'I have a reservation.', zh:'我有訂房。', who:'say', tip:'到飯店櫃台第一句。接著說名字：<b>under Chen</b>（陳的名字訂的）。'},
+  {en:'What time is check-out?', zh:'幾點要退房？', who:'say', swap:['check-out','breakfast'], tip:'<b>check-in / check-out</b> 入住、退房，台灣也這樣講。'},
+  {en:'Can I leave my bag here?', zh:'行李可以寄放在這嗎？', who:'say', tip:'退房後還想逛街，這句超實用。'},
+  {en:"The Wi-Fi doesn't work.", zh:'Wi-Fi 不能用。', who:'say', swap:['The Wi-Fi','The TV','The air conditioner'], tip:'<b>___ doesn\'t work.</b> 什麼東西壞了都能用。'}
+ ]},
+ {id:'help', en:'Rescue Phrases', zh:'卡住時的救命句', sc:'--st1', scene:'聽不懂、說不出來的時候，不要沉默。這 7 句讓你永遠有路可走，學英文最重要的一課。',items:[
+  {en:"Sorry, I don't understand.", zh:'抱歉，我聽不懂。', who:'say', tip:'說出來一點都不丟臉，對方通常會換簡單的說法。'},
+  {en:'Can you speak more slowly?', zh:'可以說慢一點嗎？', who:'say', tip:'<b>slowly</b> 慢慢地。這句是你的「降速按鈕」。'},
+  {en:'Can you write it down?', zh:'可以寫下來嗎？', who:'say', tip:'聽不懂但看得懂？很多人都是這樣，這句超好用。'},
+  {en:'How do you say this in English?', zh:'這個英文怎麼說？', who:'say', tip:'指著東西問。這是自己學新字最快的方法。'},
+  {en:'What does it mean?', zh:'那是什麼意思？', who:'say', tip:'聽到不懂的字，重複那個字再問這句。'},
+  {en:'Just a moment.', zh:'等我一下。', who:'say', tip:'需要時間想、或翻手機時說，爭取時間。'},
+  {en:'No problem.', zh:'沒問題／不客氣。', who:'say', tip:'別人跟你說謝謝或道歉時都能回這句。'}
+ ]},
+ {id:'work', en:'Work & Meetings', zh:'工作與視訊會議', sc:'--st3', scene:'公司開始有國外客戶的視訊會議。這幾句讓你能開口參與，不再只是靜音聽。',items:[
+  {en:'Can you hear me?', zh:'聽得到我嗎？', who:'say', tip:'視訊會議第一句。對方問你時，回 <b>Yes, I can hear you.</b>'},
+  {en:"Sorry, I'm a little late.", zh:'抱歉，我晚了一點。', who:'say', tip:'<b>a little</b> 又出現了！讓道歉聽起來輕鬆。'},
+  {en:'I have a question.', zh:'我有一個問題。', who:'say', tip:'想插話就先說這句，大家會停下來聽你說。'},
+  {en:'Sounds good.', zh:'聽起來不錯／好啊。', who:'say', tip:'同意別人的提議時說。比 OK 更自然。'},
+  {en:'Let me check and get back to you.', zh:'我確認一下再回覆你。', who:'say', tip:'不確定答案時的專業說法，幫你爭取時間。'},
+  {en:'Could you send me an email?', zh:'可以寄 email 給我嗎？', who:'say', tip:'聽不太懂會議內容？請對方寫下來，你就能慢慢看。'},
+  {en:'Have a nice weekend!', zh:'週末愉快！', who:'say', swap:['weekend','day','trip'], tip:'週五會議結束時說，馬上拉近距離。'}
+ ]}
+];
+// 台灣人早就會的英文字：用來證明你不是從零開始
+const LOAN = ['OK','bye-bye','coffee','Wi-Fi','menu','taxi','bus','hotel','pizza','cake','email','password','sofa','T-shirt','size','sale','party','happy','cool','ice','iPhone','video','online','DIY','Line','shopping','bonus','salad','order','check-in','sandwich','fan','top','mango','tea','model'];
+const IV = [1,2,4,8,16,32,64]; // 複習間隔（天）：在快忘記前再看一次
+
+// ===== 進度存在這台手機／電腦 =====
+const KEY = 'english_restart_v1';
+function fresh(){return {onboard:false,known:0,cards:{},done:{},streak:{last:'',n:0},log:{}}}
+let S = (()=>{try{const v=JSON.parse(localStorage.getItem(KEY));return v&&v.cards?Object.assign(fresh(),v):fresh()}catch(e){return fresh()}})();
+function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
+const today = ()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+const addDays = (n)=>{const d=new Date();d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+function touch(){ // 今天有練習：連續天數 +1
+  const t=today(); if(S.streak.last===t)return;
+  S.streak.n = (S.streak.last===addDays(-1)) ? S.streak.n+1 : 1; S.streak.last=t; save();
+}
+const streakNow = ()=> (S.streak.last===today()||S.streak.last===addDays(-1)) ? S.streak.n : 0;
+const allItems = ()=>LESSONS.flatMap(l=>l.items.map((it,i)=>({...it,id:l.id+'-'+i,lesson:l})));
+const learned = ()=>allItems().filter(it=>S.cards[it.id]);
+const dueList = ()=>learned().filter(it=>S.cards[it.id].due<=today());
+
+// ===== 發音 =====
+let VOICE=null;
+function pickVoice(){try{const vs=speechSynthesis.getVoices();VOICE=vs.find(v=>/en[-_]US/i.test(v.lang)&&/Samantha|Google|Natural|Aria|Jenny/i.test(v.name))||vs.find(v=>/en[-_]US/i.test(v.lang))||vs.find(v=>/^en/i.test(v.lang))||null}catch(e){}}
+try{pickVoice();speechSynthesis.onvoiceschanged=pickVoice}catch(e){}
+function speak(t,slow){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='en-US';u.rate=slow?.6:.92;if(VOICE)u.voice=VOICE;speechSynthesis.speak(u)}catch(e){}}
+const ICON_PLAY='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4z"/></svg>';
+const ICON_SLOW='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zm1 8.6V7h-2v6.4l4.3 2.6 1-1.7z"/></svg>';
+function playBtns(t){return `<div class="row"><button class="play" data-say="${esc(t)}">${ICON_PLAY}聽發音</button><button class="play" data-say="${esc(t)}" data-slow="1">${ICON_SLOW}慢速</button></div>`}
+document.addEventListener('click',e=>{const b=e.target.closest('[data-say]');if(b)speak(b.dataset.say,!!b.dataset.slow)});
+
+// ===== 小工具 =====
+const $ = s=>document.querySelector(s);
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+const shuffle = a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+const norm = s=>s.toLowerCase().replace(/[^a-z0-9' ]/g,'').replace(/\s+/g,' ').trim();
+const app = $('#app');
+let TAB = 'home', RUN = null;
+
+// ===== 分頁 =====
+const TABS = [
+ ['home','今天','<path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>'],
+ ['lessons','情境課','<rect x="4" y="3" width="16" height="18" rx="2"/><circle cx="12" cy="11" r="3.5"/><path d="M8 17h8"/>'],
+ ['review','複習','<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/>'],
+ ['me','我會的句子','<path d="M4 6h16M4 12h16M4 18h10"/>']
+];
+function drawTabs(){
+  const n=dueList().length;
+  $('#tabs').innerHTML = TABS.map(([k,l,p])=>`<button class="tab" data-tab="${k}" ${TAB===k?'aria-current="page"':''}><svg viewBox="0 0 24 24" aria-hidden="true">${p}</svg>${l}${k==='review'&&n?`<span class="badge">${n}</span>`:''}</button>`).join('');
+  $('nav.tabs').hidden = !!RUN || !S.onboard;
+}
+$('#tabs').addEventListener('click',e=>{const b=e.target.closest('[data-tab]');if(!b)return;go(b.dataset.tab)});
+function go(t){TAB=t;RUN=null;render();window.scrollTo(0,0)}
+function render(){
+  drawTabs();
+  if(!S.onboard) return onboard(0);
+  if(RUN) return RUN.kind==='lesson'?drawLesson():drawReview();
+  ({home,lessons,review:reviewIntro,me})[TAB]();
+}
+
+// ===== 第一次打開：先打破「我學不會」的想法 =====
+let OB = {pick:new Set()};
+function onboard(step){
+  drawTabs();
+  if(step===0){
+    app.innerHTML = `
+    <div class="cover"><span class="eyebrow">English · Restart</span><h1>你不是學不會，<br>是以前的方法不適合大人。</h1>
+    <p>記性好卻背了就忘？這很正常。花 3 分鐘看完，你會知道這次為什麼不一樣。</p></div>
+    <div class="card why">
+      <div class="item"><span class="n">1</span><div><h3>單字表沒有「用途」，大腦就會丟掉</h3><p class="mut">大腦只留下用得到的東西。背 apple＝蘋果很快就忘，但「Can I get a coffee?」能讓你真的買到咖啡，就記得住。</p></div></div>
+      <div class="item"><span class="n">2</span><div><h3>先學文法，讓你開口前就怕錯</h3><p class="mut">小孩學說話從不背文法。這裡先學一整句能直接用的話，文法以後自然會懂。</p></div></div>
+      <div class="item"><span class="n">3</span><div><h3>沒在「快忘記時」複習</h3><p class="mut">考完試就不再看，再好的記性也會忘。這裡會在第 1、2、4、8… 天提醒你複習，每次只要幾分鐘。</p></div></div>
+    </div>
+    <button class="btn wide" id="ob1">好，我想試試看</button>`;
+    $('#ob1').onclick=()=>onboard(1);
+  } else if(step===1){
+    app.innerHTML = `
+    <div class="card"><span class="eyebrow">小測驗</span><h2>下面這些英文，你看得懂幾個？</h2><p class="mut">看得懂的就點一下，不用想太久。</p>
+    <div class="loan" id="loan">${LOAN.map((w,i)=>`<button class="chip" data-i="${i}" aria-pressed="${OB.pick.has(i)}">${esc(w)}</button>`).join('')}</div></div>
+    <div class="row"><button class="btn ghost" id="oball">全部都懂</button><button class="btn" style="flex:1" id="ob2">好了</button></div>`;
+    $('#loan').onclick=e=>{const b=e.target.closest('[data-i]');if(!b)return;const i=+b.dataset.i;OB.pick.has(i)?OB.pick.delete(i):OB.pick.add(i);b.setAttribute('aria-pressed',OB.pick.has(i))};
+    $('#oball').onclick=()=>{LOAN.forEach((_,i)=>OB.pick.add(i));onboard(1)};
+    $('#ob2').onclick=()=>{S.known=OB.pick.size;save();onboard(2)};
+  } else {
+    const n=S.known;
+    app.innerHTML = `
+    <div class="card center"><span class="eyebrow">結果</span>
+      <p class="en" style="font-size:4rem;color:var(--accent)">${n}</p>
+      <h2>${n>=20?'你已經認識很多英文了！':n>=8?'你比自己以為的還會！':'有好的開始了！'}</h2>
+      <p class="mut">你認識 ${n} 個英文字，而且會念。你不是從零開始，而是從「已經會一點」開始。<br>接下來我們每天花 5 分鐘，學整句能直接用的英文。</p></div>
+    <div class="card"><h3>這個程式怎麼用</h3>
+      <div class="why">
+        <div class="item"><span class="n">聽</span><p>每句都有真人速度和慢速發音，先聽懂再說。</p></div>
+        <div class="item"><span class="n">說</span><p>跟著念出聲 3 次。開口比看懂更能記住。</p></div>
+        <div class="item"><span class="n">換</span><p>同一句換一個字就變新句子，一句當十句用。</p></div>
+        <div class="item"><span class="n">複</span><p>快忘記時才複習。每學完一課就蓋一個護照章。</p></div>
+      </div></div>
+    <button class="btn wide" id="ob3">開始第一課：咖啡店點餐</button>`;
+    $('#ob3').onclick=()=>{S.onboard=true;save();startLesson('cafe')};
+  }
+  window.scrollTo(0,0);
+}
+
+// ===== 首頁 =====
+function nextLesson(){return LESSONS.find(l=>!S.done[l.id])}
+function home(){
+  const due=dueList().length, nl=nextLesson(), h=new Date().getHours();
+  const greet = h<11?'早安':h<18?'午安':'晚安';
+  const did = S.streak.last===today();
+  let cta;
+  if(due) cta = `<button class="btn wide" data-run="review">複習 ${due} 句（約 ${Math.max(1,Math.ceil(due/4))} 分鐘）</button>`;
+  else if(nl) cta = `<button class="btn wide" data-lesson="${nl.id}">${did?'再學一課':'今天的課'}：${esc(nl.zh)}</button>`;
+  else cta = `<button class="btn wide" data-tab2="me">8 課全部完成！去聽聽你會的句子</button>`;
+  app.innerHTML = `
+  <div class="cover"><span class="eyebrow">${greet} · ${did?'今天已經練過了':'今天只要 5 分鐘'}</span>
+    <h1>${did?'做得好，明天見。':'今天說一句新的英文吧。'}</h1>
+    <p>${due?'有句子快要忘記了，先複習最划算。':nl?esc(nl.scene):'你已經能應付 8 種生活情境，繼續複習讓它們變成反射動作。'}</p></div>
+  ${cta}
+  <div class="stats">
+    <div class="stat"><b>${learned().length}</b><span>會說的句子</span></div>
+    <div class="stat"><b>${streakNow()}</b><span>連續天數</span></div>
+    <div class="stat"><b>${Object.keys(S.done).length}<small class="mut" style="font-size:.9rem">/${LESSONS.length}</small></b><span>護照章</span></div>
+  </div>
+  <div class="card"><div class="row" style="justify-content:space-between"><h3>我的英文護照</h3><span class="small mut">學完一課蓋一章</span></div>${stampGrid()}</div>
+  ${todayPhrase()}`;
+  bindCommon();
+}
+function stampGrid(){
+  return `<div class="stamps">${LESSONS.map(l=>{const got=S.done[l.id],c=l.items.filter((_,i)=>S.cards[l.id+'-'+i]).length;
+    return `<button class="stamp ${got?'got':''}" data-lesson="${l.id}" style="--sc:var(${l.sc})"><span class="seal">${esc(l.en)}</span><span class="zh">${esc(l.zh)}</span><span class="cnt">${got?'已完成 · 再練一次':c?c+'/'+l.items.length+' 句':'尚未出發'}</span></button>`}).join('')}</div>`;
+}
+function todayPhrase(){
+  const pool=learned().length?learned():LESSONS[0].items.map((it,i)=>({...it,id:'cafe-'+i}));
+  const d=new Date(), it=pool[(d.getDate()+d.getMonth()*31)%pool.length];
+  return `<div class="card"><span class="eyebrow">今日一句 · 走路時念念看</span><p class="en" style="font-size:1.5rem">${esc(it.en)}</p><p class="mut">${esc(it.zh)}</p>${playBtns(it.en)}</div>`;
+}
+function bindCommon(){
+  app.querySelectorAll('[data-lesson]').forEach(b=>b.onclick=()=>startLesson(b.dataset.lesson));
+  app.querySelectorAll('[data-run="review"]').forEach(b=>b.onclick=startReview);
+  app.querySelectorAll('[data-tab2]').forEach(b=>b.onclick=()=>go(b.dataset.tab2));
+}
+
+// ===== 情境課列表 =====
+function lessons(){
+  app.innerHTML = `<div><span class="eyebrow">8 個生活情境</span><h1>選一個你最想用的地方</h1><p class="mut" style="margin-top:6px">不用照順序。先學你下個月真的會遇到的情境，最有動力。</p></div>
+  ${LESSONS.map(l=>{const got=S.done[l.id];return `<div class="card"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><div style="min-width:0"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}${got?' · 已蓋章':''}</span><h2>${esc(l.zh)}</h2></div></div>
+    <p class="mut small">${esc(l.scene)}</p><p class="en" style="font-size:1.1rem">「${esc(l.items[0].en)}」</p>
+    <button class="btn ${got?'ghost':''}" data-lesson="${l.id}">${got?'再練一次':'開始這課 · 7 句'}</button></div>`}).join('')}`;
+  bindCommon();
+}
+
+// ===== 上課：學 → 練 → 蓋章 =====
+function startLesson(id){
+  const l=LESSONS.find(x=>x.id===id);
+  RUN={kind:'lesson',l,phase:'intro',i:0,said:0,swap:0,q:[],qi:0,ok:0};
+  touch();render();window.scrollTo(0,0);
+}
+function makeQuestions(l){
+  const qs=[];
+  l.items.forEach((it,i)=>{
+    const others=l.items.filter((_,j)=>j!==i);
+    if(it.reply) qs.push({type:'reply',it,opts:shuffle([it.reply,...shuffle(others.map(o=>o.en).filter(e=>e!==it.reply)).slice(0,2)])});
+    else if(i%2===0 && it.en.split(' ').length<=7) qs.push({type:'build',it});
+    else qs.push({type:'listen',it,opts:shuffle([it.zh,...shuffle(others).slice(0,2).map(o=>o.zh)])});
+  });
+  return shuffle(qs);
+}
+function drawLesson(){
+  const R=RUN,l=R.l,n=l.items.length;
+  const total=n+(R.q.length||n), pos=R.phase==='intro'?0:R.phase==='learn'?R.i:R.phase==='practice'?n+R.qi:total;
+  const head=`<div class="lessonhead"><button class="x" id="quit" aria-label="離開這課">×</button><div class="prog"><i style="width:${pos/total*100}%"></i></div><span class="small mut" style="font-variant-numeric:tabular-nums">${Math.min(pos,total)}/${total}</span></div>`;
+  if(R.phase==='intro'){
+    app.innerHTML = head+`<div class="cover" style="background:var(${l.sc})"><span class="eyebrow">${esc(l.en)}</span><h1>${esc(l.zh)}</h1><p>${esc(l.scene)}</p></div>
+    <div class="card"><h3>這課會這樣進行</h3><p class="mut">先一句一句聽、跟著念，然後做 ${n} 題小練習。答錯沒關係，錯的題目會再出現一次，你一定會過關。</p></div>
+    <button class="btn wide" id="go">開始</button>`;
+    $('#go').onclick=()=>{R.phase='learn';render()};
+  } else if(R.phase==='learn'){
+    const it=l.items[R.i];
+    const shown = it.swap ? it.en.replace(it.swap[0],it.swap[R.swap]) : it.en;
+    app.innerHTML = head+`<div class="card">
+      <span class="who ${it.who==='hear'?'hear':''}">${it.who==='hear'?'你會聽到對方說':'你可以這樣說'}</span>
+      <p class="en phrase" id="ph">${esc(shown)}</p><p class="mut">${esc(it.zh)}</p>${playBtns(shown)}
+      ${it.swap?`<div><p class="small mut" style="margin-bottom:6px">換一個字，就是新的一句：</p><div class="swaps" id="swaps">${it.swap.map((w,k)=>`<button class="chip" data-k="${k}" aria-pressed="${k===R.swap}">${esc(w)}</button>`).join('')}</div></div>`:''}
+      <div class="tip">${it.tip}</div>
+      ${it.reply?`<div class="tip"><span class="small mut">聽到後你可以回：</span><br><span class="en" style="font-size:1.1rem">${esc(it.reply)}</span></div>`:''}
+    </div>
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h3>跟著念出聲 3 次</h3><p class="small mut">小聲念也可以，嘴巴有動就有用。</p></div><div class="dots">${[0,1,2].map(k=>`<i class="${k<R.said?'on':''}"></i>`).join('')}</div></div>
+      <button class="btn ghost wide" id="said">我念了一次</button></div>
+    <button class="btn wide" id="next">${R.i<n-1?'下一句':'開始練習'}</button>`;
+    speak(shown);
+    $('#said').onclick=()=>{if(R.said<3){R.said++;speak(shown)}render()};
+    if(it.swap) $('#swaps').onclick=e=>{const b=e.target.closest('[data-k]');if(!b)return;R.swap=+b.dataset.k;render()};
+    $('#next').onclick=()=>{R.said=0;R.swap=0;if(R.i<n-1)R.i++;else{R.phase='practice';R.q=makeQuestions(l);R.qi=0}render();window.scrollTo(0,0)};
+  } else if(R.phase==='practice'){
+    drawQuestion(head);
+  } else {
+    finishLesson();
+  }
+  const q=$('#quit'); if(q) q.onclick=()=>go(TAB);
+}
+function drawQuestion(head){
+  const R=RUN,q=R.q[R.qi],it=q.it;
+  let body='';
+  if(q.type==='listen') body=`<span class="eyebrow">聽聽看</span><h2>這句是什麼意思？</h2>${playBtns(it.en)}<div class="opts">${q.opts.map(o=>`<button class="opt" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+  if(q.type==='reply') body=`<span class="eyebrow">實戰回應</span><h2>對方說：</h2><p class="en" style="font-size:1.5rem">${esc(it.en)}</p>${playBtns(it.en)}<p class="mut">你要怎麼回？</p><div class="opts">${q.opts.map(o=>`<button class="opt en" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+  if(q.type==='build'){
+    q.pool=q.pool||shuffle(it.en.split(' ').map((w,k)=>({w,k}))); q.ans=q.ans||[];
+    body=`<span class="eyebrow">組句子</span><h2>用英文說：「${esc(it.zh)}」</h2><p class="small mut">依順序點下面的字。點上面的字可以拿回來。</p>
+    <div class="answer" id="ans">${q.ans.map(k=>`<button class="tile" data-back="${k}">${esc(q.pool.find(p=>p.k===k).w)}</button>`).join('')}</div>
+    <div class="pool" id="pool">${q.pool.map(p=>`<button class="tile ${q.ans.includes(p.k)?'used':''}" data-k="${p.k}" ${q.ans.includes(p.k)?'tabindex="-1" aria-hidden="true"':''}>${esc(p.w)}</button>`).join('')}</div>
+    <button class="btn wide" id="check" ${q.ans.length===q.pool.length?'':'disabled'}>確認</button>`;
+  }
+  app.innerHTML = head+`<div class="card">${body}</div><div id="fb"></div>`;
+  if(q.type==='build'){
+    $('#pool').onclick=e=>{const b=e.target.closest('[data-k]');if(!b||q.done)return;q.ans.push(+b.dataset.k);drawQuestion(head)};
+    $('#ans').onclick=e=>{const b=e.target.closest('[data-back]');if(!b||q.done)return;q.ans=q.ans.filter(k=>k!==+b.dataset.back);drawQuestion(head)};
+    $('#check').onclick=()=>{const got=q.ans.map(k=>q.pool.find(p=>p.k===k).w).join(' ');q.done=true;feedback(norm(got)===norm(it.en),it.en)};
+  } else {
+    app.querySelectorAll('.opt').forEach(b=>b.onclick=()=>{
+      if(q.done)return;q.done=true;const right=q.type==='reply'?it.reply:it.zh, ok=b.dataset.v===right;
+      app.querySelectorAll('.opt').forEach(x=>{if(x.dataset.v===right)x.classList.add('right');else if(x===b)x.classList.add('wrong')});
+      feedback(ok,q.type==='reply'?it.reply:it.en);
+    });
+    if(q.type==='listen'&&!q.played){q.played=true;speak(it.en)}
+  }
+  $('#quit').onclick=()=>go(TAB);
+}
+function feedback(ok,en){
+  const R=RUN,q=R.q[R.qi];
+  if(ok)R.ok++;
+  else if(!q.retry)R.q.push({type:q.type,it:q.it,opts:q.opts?shuffle(q.opts):undefined,retry:true});
+  speak(en);
+  const praise=['答對了！','很好！','沒錯！','就是這樣！'][Math.floor(Math.random()*4)];
+  $('#fb').innerHTML=`<div class="fb ${ok?'ok':'no'}"><h3>${ok?praise:'差一點！等一下會再考一次'}</h3><p class="en" style="font-size:1.2rem">${esc(en)}</p>
+    <button class="btn wide" id="cont">繼續</button></div>`;
+  $('#cont').onclick=()=>{R.qi++;if(R.qi>=R.q.length)R.phase='done';render();window.scrollTo(0,0)};
+  $('#cont').focus();
+}
+function finishLesson(){
+  const l=RUN.l, first=!S.done[l.id];
+  l.items.forEach((_,i)=>{const id=l.id+'-'+i;if(!S.cards[id])S.cards[id]={box:0,due:addDays(1)}});
+  S.done[l.id]=true;S.log[today()]=(S.log[today()]||0)+1;touch();save();
+  const n=learned().length;
+  app.innerHTML=`<div class="card center" style="--sc:var(${l.sc})"><span class="eyebrow">${first?'蓋章！':'複習完成'}</span>
+    <div class="big-stamp"><span>${esc(l.en)}<br><small style="font-size:.7rem">${today()}</small></span></div>
+    <h2>你現在能用英文說 ${n} 句話了</h2>
+    <p class="mut">這 7 句明天會出現在「複習」。在快忘記的時候再看一次，就會變成你自己的英文。</p></div>
+    <div class="card"><h3>今天學會的句子</h3><div class="list">${l.items.map(it=>`<div class="li"><div class="t"><p class="en">${esc(it.en)}</p><p class="small mut">${esc(it.zh)}</p></div><button class="play" data-say="${esc(it.en)}" aria-label="播放">${ICON_PLAY}</button></div>`).join('')}</div></div>
+    <button class="btn wide" id="home">回到今天</button>`;
+  RUN=null;drawTabs();$('#home').onclick=()=>go('home');window.scrollTo(0,0);
+}
+
+// ===== 複習：先在腦中說，再對答案 =====
+function reviewIntro(){
+  const d=dueList(), all=learned();
+  if(!all.length){app.innerHTML=`<div class="card"><span class="eyebrow">複習</span><h2>學完第一課後，這裡就會有要複習的句子</h2><p class="mut">每句會在第 1、2、4、8、16… 天回來找你，剛好在快忘記的時候。</p><button class="btn" data-lesson="${(nextLesson()||LESSONS[0]).id}">先去上第一課</button></div>`;return bindCommon()}
+  const next=all.map(it=>S.cards[it.id].due).filter(x=>x>today()).sort()[0];
+  app.innerHTML=`<div><span class="eyebrow">間隔複習</span><h1>${d.length?`今天有 ${d.length} 句要複習`:'今天的複習都完成了'}</h1><p class="mut" style="margin-top:6px">${d.length?'看中文，先試著用英文說出來（說錯也沒關係），再翻開答案。':`下一次複習是 ${next||'—'}。想多練的話，可以自由練習全部句子。`}</p></div>
+  <button class="btn wide" id="rv">${d.length?'開始複習':'自由練習全部 '+all.length+' 句'}</button>
+  <div class="card"><h3>記憶等級</h3><p class="small mut">每次「馬上說出來」，句子就升一級，下次隔更久才複習。</p>
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">${[['新學',0,0],['熟悉',1,2],['穩固',3,4],['反射',5,6]].map(([t,a,b])=>`<div class="stat"><b>${all.filter(it=>{const x=S.cards[it.id].box;return x>=a&&x<=b}).length}</b><span>${t}</span></div>`).join('')}</div></div>`;
+  $('#rv').onclick=()=>startReview(!d.length);
+}
+function startReview(freePlay){
+  const list = freePlay===true ? shuffle(learned()).slice(0,15) : shuffle(dueList());
+  if(!list.length)return go('review');
+  RUN={kind:'review',list,i:0,show:false,free:freePlay===true,stats:[0,0,0]};touch();render();window.scrollTo(0,0);
+}
+function drawReview(){
+  const R=RUN;
+  if(R.i>=R.list.length){
+    save();RUN=null;drawTabs();
+    app.innerHTML=`<div class="card center"><span class="eyebrow">複習完成</span><p class="en" style="font-size:3.5rem;color:var(--accent)">${R.stats[2]+R.stats[1]}<small class="mut" style="font-size:1.4rem">/${R.list.length}</small></p><h2>${R.stats[0]===0?'全部都說得出來，太強了！':'想不起來的句子，明天會再出現。'}</h2><p class="mut">忘記不是失敗，是大腦在決定要不要留下它。每想起來一次，就記得更牢。</p></div><button class="btn wide" id="home">回到今天</button>`;
+    $('#home').onclick=()=>go('home');return;
+  }
+  const it=R.list[R.i];
+  app.innerHTML=`<div class="lessonhead"><button class="x" id="quit" aria-label="離開複習">×</button><div class="prog"><i style="width:${R.i/R.list.length*100}%"></i></div><span class="small mut" style="font-variant-numeric:tabular-nums">${R.i+1}/${R.list.length}</span></div>
+  <div class="card"><span class="eyebrow" style="color:var(${it.lesson.sc})">${esc(it.lesson.zh)}</span>
+    <h2>${it.who==='hear'?'對方說了這句，英文是？':'用英文怎麼說？'}</h2><p style="font-size:1.4rem;font-weight:700">${esc(it.zh)}</p>
+    ${R.show?`<div class="tip"><p class="en phrase">${esc(it.en)}</p></div>${playBtns(it.en)}`:`<p class="small mut">先在心裡或小聲說一次，再按下面的按鈕。</p>`}
+  </div>
+  ${R.show?`<p class="small mut center">剛剛你說得出來嗎？誠實選，程式會幫你安排下次時間。</p><div class="rate"><button class="btn r0" data-r="0">想不起來</button><button class="btn r1" data-r="1">想了一下</button><button class="btn r2" data-r="2">馬上說出來</button></div>`:`<button class="btn wide" id="show">看答案</button>`}`;
+  $('#quit').onclick=()=>{save();go('review')};
+  if(!R.show){$('#show').onclick=()=>{R.show=true;render();speak(it.en)};return}
+  app.querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>{
+    const r=+b.dataset.r,c=S.cards[it.id];R.stats[r]++;
+    if(!R.free){
+      if(r===0){c.box=0;c.due=addDays(1)}
+      else if(r===1){c.due=addDays(IV[c.box])}
+      else {c.box=Math.min(c.box+1,IV.length-1);c.due=addDays(IV[c.box])}
+    } else if(r===0){c.box=0;c.due=addDays(1)}
+    S.log[today()]=(S.log[today()]||0)+1;save();
+    R.i++;R.show=false;render();window.scrollTo(0,0);
+  });
+}
+
+// ===== 我會的句子 =====
+let CONFIRM=false;
+function me(){
+  const all=learned(), lv=['新學','新學','熟悉','熟悉','穩固','穩固','反射'];
+  const days=Object.keys(S.log).length;
+  app.innerHTML=`<div><span class="eyebrow">My English</span><h1>你會說 ${all.length} 句英文</h1><p class="mut" style="margin-top:6px">${all.length?`總共練習了 ${days} 天。點喇叭聽一遍，你會發現自己真的都懂。`:'學完第一課，句子就會出現在這裡。'}</p></div>
+  ${LESSONS.filter(l=>l.items.some((_,i)=>S.cards[l.id+'-'+i])).map(l=>`<div class="card"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}</span><h3>${esc(l.zh)}</h3><div class="list">${l.items.map((it,i)=>{const c=S.cards[l.id+'-'+i];if(!c)return'';return `<div class="li"><div class="t"><p class="en">${esc(it.en)}</p><p class="small mut">${esc(it.zh)}</p></div><div class="row" style="flex-wrap:nowrap"><span class="boxlv">${lv[c.box]}</span><button class="play" data-say="${esc(it.en)}" aria-label="播放 ${esc(it.en)}">${ICON_PLAY}</button></div></div>`}).join('')}</div></div>`).join('')}
+  ${all.length?'':`<button class="btn wide" data-lesson="${(nextLesson()||LESSONS[0]).id}">去上第一課</button>`}
+  <div class="card"><h3>設定</h3><p class="small mut">進度只存在這台裝置的瀏覽器裡。換手機或清除瀏覽器資料後會重新開始。</p>
+  ${CONFIRM?`<div class="confirm"><p><b>確定要清除全部進度嗎？</b>護照章和學過的句子都會消失，無法復原。</p><div class="row"><button class="btn ghost" id="no">取消</button><button class="btn" style="background:var(--bad);color:#fff" id="yes">清除</button></div></div>`:`<button class="btn ghost" id="reset">清除進度重新開始</button>`}</div>`;
+  bindCommon();
+  if(CONFIRM){$('#no').onclick=()=>{CONFIRM=false;me()};$('#yes').onclick=()=>{CONFIRM=false;S=fresh();OB={pick:new Set()};save();go('home')}}
+  else $('#reset').onclick=()=>{CONFIRM=true;me()};
+}
+
+render();
+</script>
+</body></html>

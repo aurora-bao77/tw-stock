@@ -6,6 +6,7 @@
   - iPhone：用 Safari 打開 → 分享 → 加入主畫面
   - Android：用 Chrome 打開 → ⋮ → 加到主畫面（或安裝下方 App）
 - **股票小學堂**：`https://aurora-bao77.github.io/tw-stock/school/`
+- **英文重新出發**：`https://aurora-bao77.github.io/tw-stock/english/`（給想重新學英文的大人：整句學、跟讀、間隔複習）
 - **Android App**：安裝 `TwStock.apk`，可看盤中即時五檔，並在背景收到買賣點通知。
 
 ## 自動更新
