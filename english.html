@@ -114,6 +114,22 @@ nav.tabs .in{display:flex;max-width:640px;width:100%}
 .boxlv{font-size:.72rem;color:var(--mut);white-space:nowrap}
 .big-stamp{width:150px;height:150px;margin:8px auto;border-radius:50%;border:5px double var(--sc);color:var(--sc);display:grid;place-items:center;text-align:center;font-family:var(--display);font-weight:800;text-transform:uppercase;letter-spacing:.06em;transform:rotate(-10deg);animation:thump .5s ease-out}
 @keyframes thump{0%{transform:scale(1.6) rotate(-10deg);opacity:.2}70%{transform:scale(.95) rotate(-10deg);opacity:1}100%{transform:scale(1) rotate(-10deg)}}
+/* 目標與習慣 */
+.field{font:inherit;font-size:16px;width:100%;min-width:0;border:2px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--paper);color:var(--ink)}
+.field:focus{outline:none;border-color:var(--accent)}
+.ifthen{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:700}
+.ifthen .field{flex:1 1 140px;width:auto}
+.goal{background:var(--accsoft);border-color:transparent}
+.goaltext{font-size:1.15rem;font-weight:700}
+.linkbtn{font:inherit;background:none;border:0;color:var(--accent);font-weight:700;cursor:pointer;padding:4px}
+.linkbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;text-align:center}
+.day{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:.8rem;color:var(--mut)}
+.day i{width:34px;height:34px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;font-style:normal;font-weight:800}
+.day.on i{background:var(--accent);border-color:var(--accent);color:var(--onacc)}
+.day.today span{color:var(--accent);font-weight:700}
+.day.today:not(.on) i{border-color:var(--accent);border-style:dashed}
+.day.future i{opacity:.5}
 /* 自然發音 */
 .grapheme{font-family:var(--display);font-weight:800;font-size:4.2rem;line-height:1;color:var(--accent);letter-spacing:-.02em}
 .zy{font-size:1rem;font-weight:700;background:var(--accsoft);color:var(--accent);border-radius:999px;padding:4px 12px}
@@ -238,16 +254,16 @@ const IV = [1,2,4,8,16,32,64]; // 複習間隔（天）：在快忘記前再看�
 
 // ===== 進度存在這台手機／電腦 =====
 const KEY = 'english_restart_v1';
-function fresh(){return {onboard:false,known:0,cards:{},done:{},streak:{last:'',n:0},log:{},custom:[],chat:null}}
+function fresh(){return {onboard:false,known:0,cards:{},done:{},streak:{last:'',n:0},log:{},custom:[],chat:null,days:{},goal:'',plan:''}}
 let S = (()=>{try{const v=JSON.parse(localStorage.getItem(KEY));return v&&v.cards?Object.assign(fresh(),v):fresh()}catch(e){return fresh()}})();
+for(const k in S.log)S.days[k]=true; if(S.streak.last)S.days[S.streak.last]=true; // 舊版進度補上練習日
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
 const today = ()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
 const addDays = (n)=>{const d=new Date();d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
-function touch(){ // 今天有練習：連續天數 +1
-  const t=today(); if(S.streak.last===t)return;
+function touch(){ // 今天有練習：記錄練習日、連續天數 +1
+  const t=today(); if(!S.days[t]){S.days[t]=true;save()} if(S.streak.last===t)return;
   S.streak.n = (S.streak.last===addDays(-1)) ? S.streak.n+1 : 1; S.streak.last=t; save();
 }
-const streakNow = ()=> (S.streak.last===today()||S.streak.last===addDays(-1)) ? S.streak.n : 0;
 const allItems = ()=>LESSONS.flatMap(l=>l.items.map((it,i)=>({...it,id:l.id+'-'+i,lesson:l}))).concat((S.custom||[]).map(c=>({...c,who:'say',lesson:CHATL})));
 const learned = ()=>allItems().filter(it=>S.cards[it.id]);
 const dueList = ()=>learned().filter(it=>S.cards[it.id].due<=today());
@@ -330,9 +346,64 @@ function onboard(step){
         <div class="item"><span class="n">換</span><p>同一句換一個字就變新句子，一句當十句用。</p></div>
         <div class="item"><span class="n">複</span><p>快忘記時才複習。每學完一課就蓋一個護照章。</p></div>
       </div></div>
-    <button class="btn wide" id="ob3">開始第一課：自然發音</button>`;
-    $('#ob3').onclick=()=>{S.onboard=true;save();startLesson('ph1')};
+    <button class="btn wide" id="ob3">下一步：寫下你的目標（30 秒）</button>`;
+    $('#ob3').onclick=()=>planView(()=>{S.onboard=true;save();startLesson('ph1')});
   }
+  window.scrollTo(0,0);
+}
+
+// ===== 不半途而廢：目標、如果…就…計畫、每週天數、今天只要 1 句 =====
+const GOALS=['出國旅行能自己點餐、問路','工作上能跟外國人溝通','陪孩子一起學英文','看影集不用一直看字幕','證明自己也學得會'];
+const WHENS=['早上喝咖啡時','坐上捷運或公車時','午餐吃完後','晚上刷完牙後'];
+function planView(next){
+  const g=S.goal||'',w=S.plan||'';
+  app.innerHTML=`<div class="card"><span class="eyebrow">30 秒設定 · 1/2</span><h2>你學英文是為了什麼？</h2>
+    <p class="small mut">寫下一個具體的畫面。大人會半途而廢，常常是覺得「學了也用不到」；每天看到自己的目標，比較撐得下去。</p>
+    <div class="swaps" id="goals">${GOALS.map(x=>`<button class="chip" data-g="${esc(x)}" aria-pressed="${x===g}">${esc(x)}</button>`).join('')}</div>
+    <label class="small mut" for="goalin">或自己寫：</label><input id="goalin" class="field" value="${esc(g)}" maxlength="40" placeholder="例如：明年去日本自由行，能用英文問路"></div>
+  <div class="card"><span class="eyebrow">30 秒設定 · 2/2</span><h2>每天什麼時候練？</h2>
+    <p class="small mut">把英文綁在你每天本來就會做的事後面，就不用靠意志力記得。</p>
+    <div class="ifthen"><span>如果我</span><input id="whenin" class="field" value="${esc(w)}" maxlength="30" placeholder="坐上捷運" aria-label="每天固定會做的事"><span>，就打開英文念一句。</span></div>
+    <div class="swaps" id="whens">${WHENS.map(x=>`<button class="chip" data-w="${esc(x)}" aria-pressed="${x===w}">${esc(x)}</button>`).join('')}</div></div>
+  <button class="btn wide" id="plansave">${S.onboard?'儲存':'儲存，開始第一課：自然發音'}</button>
+  <button class="btn ghost wide" id="planskip">${S.onboard?'取消':'先跳過'}</button>`;
+  const pick=(box,attr,inp)=>{$(box).onclick=e=>{const b=e.target.closest('['+attr+']');if(!b)return;$(inp).value=b.getAttribute(attr);app.querySelectorAll(box+' .chip').forEach(c=>c.setAttribute('aria-pressed',c===b))}};
+  pick('#goals','data-g','#goalin');pick('#whens','data-w','#whenin');
+  $('#plansave').onclick=()=>{S.goal=$('#goalin').value.trim();S.plan=$('#whenin').value.trim().replace(/^如果我?/,'').replace(/[，,。]+$/,'');save();next()};
+  $('#planskip').onclick=next;
+  window.scrollTo(0,0);
+}
+function goalCard(){
+  if(!S.goal&&!S.plan) return `<div class="card"><h3>花 30 秒寫下你的目標</h3><p class="small mut">知道自己為什麼學、每天什麼時候練，就比較不會半途而廢。</p><button class="btn ghost" id="editplan">寫下目標和計畫</button></div>`;
+  return `<div class="card goal"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><span class="eyebrow">我為什麼學英文</span><button class="linkbtn" id="editplan">修改</button></div>
+    ${S.goal?`<p class="goaltext">${esc(S.goal)}</p>`:''}${S.plan?`<p class="small mut">如果我<b>${esc(S.plan)}</b>，就打開英文念一句。</p>`:''}</div>`;
+}
+// 這週（週一開始）哪幾天有練：漏一天不歸零，只看這週累積幾天
+function weekDays(){
+  const dow=(new Date().getDay()+6)%7;
+  return '一二三四五六日'.split('').map((l,i)=>{const d=addDays(i-dow);return {l,d,done:!!S.days[d],today:i===dow,future:i>dow}});
+}
+const weekCount=()=>weekDays().filter(x=>x.done).length;
+function weekStrip(){
+  const w=weekDays(),n=w.filter(x=>x.done).length;
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h3>這週練了 ${n} 天</h3><span class="small mut">${n>=5?'超棒的一週！':n>=3?'穩定前進中':'每天一句就好'}</span></div>
+  <div class="week">${w.map(x=>`<div class="day ${x.done?'on':''} ${x.today?'today':''} ${x.future?'future':''}"><i aria-hidden="true">${x.done?'✓':''}</i><span>${x.l}</span></div>`).join('')}</div>
+  <p class="small mut">漏一天沒關係，研究發現偶爾漏掉一天不影響養成習慣。只要別連續漏兩天。</p></div>`;
+}
+function todayItem(){
+  const pool=learned().length?learned():LESSONS[0].items.map((it,i)=>({...it,id:'cafe-'+i}));
+  const d=new Date();return pool[(d.getDate()+d.getMonth()*31)%pool.length];
+}
+function oneLine(){
+  const it=dueList()[0]||todayItem();
+  app.innerHTML=`<div class="cover"><span class="eyebrow">今天只要 1 句</span><h1>累的時候，念一句也算數。</h1><p>重點是不要中斷，不是念多少。念完這句，今天就完成了。</p></div>
+  <div class="card"><p style="font-size:1.2rem;font-weight:700">${esc(it.zh)}</p><p class="en phrase">${esc(it.en)}</p>${playBtns(it.en)}<p class="small mut">按喇叭聽一次，再跟著念出聲。</p></div>
+  <button class="btn wide" id="onedone">我念出聲了</button><button class="btn ghost wide" id="oneback">回到今天</button>`;
+  speak(it.en);
+  $('#oneback').onclick=()=>go('home');
+  $('#onedone').onclick=()=>{touch();S.log[today()]=(S.log[today()]||0)+1;save();
+    app.innerHTML=`<div class="card center"><span class="eyebrow">今天完成了</span><p class="en" style="font-size:3rem;color:var(--accent)">✓</p><h2>做得好，習慣沒有中斷。</h2><p class="mut">明天見。想多練一點的話，隨時可以回來上課或跟 Emma 聊天。</p></div>${weekStrip()}<button class="btn wide" id="home">回到今天</button>`;
+    $('#home').onclick=()=>go('home');window.scrollTo(0,0)};
   window.scrollTo(0,0);
 }
 
@@ -341,26 +412,32 @@ function nextLesson(){return [...PHONICS,...LESSONS].find(l=>!S.done[l.id])}
 function home(){
   const due=dueList().length, nl=nextLesson(), h=new Date().getHours();
   const greet = h<11?'早安':h<18?'午安':'晚安';
-  const did = S.streak.last===today();
+  const did = S.days[today()];
+  const gap = !did && Object.keys(S.days).length>0 && !S.days[addDays(-1)];
   let cta;
   if(due) cta = `<button class="btn wide" data-run="review">複習 ${due} 句（約 ${Math.max(1,Math.ceil(due/4))} 分鐘）</button>`;
   else if(nl) cta = `<button class="btn wide" data-lesson="${nl.id}">${did?'再學一課':'今天的課'}：${esc(nl.zh)}</button>`;
   else cta = `<button class="btn wide" data-tab2="me">8 課全部完成！去聽聽你會的句子</button>`;
   app.innerHTML = `
   <div class="cover"><span class="eyebrow">${greet} · ${did?'今天已經練過了':'今天只要 5 分鐘'}</span>
-    <h1>${did?'做得好，明天見。':'今天說一句新的英文吧。'}</h1>
-    <p>${due?'有句子快要忘記了，先複習最划算。':nl?esc(nl.scene):'你已經能應付 8 種生活情境，繼續複習讓它們變成反射動作。'}</p></div>
+    <h1>${did?'做得好，明天見。':gap?'歡迎回來！':'今天說一句新的英文吧。'}</h1>
+    <p>${gap?'休息一下沒關係，進度都還在。今天念一句，就把習慣接回來。':due?'有句子快要忘記了，先複習最划算。':nl?esc(nl.scene):'你已經能應付 8 種生活情境，繼續複習讓它們變成反射動作。'}</p></div>
   ${cta}
+  ${did?'':'<button class="btn ghost wide" id="oneline">好累…今天只念 1 句就好</button>'}
+  ${goalCard()}
   <button class="card chatcta" data-tab2="chat"><span class="eyebrow">今日話題 · AI 聊天</span><span class="row" style="justify-content:space-between;flex-wrap:nowrap;width:100%"><span><b>和 Emma 聊「${esc(dayTopic().zh)}」</b><br><span class="small mut">用簡單英文聊 3 句，說錯 Emma 會教你更自然的說法</span></span><span class="en" style="font-size:1.6rem;color:var(--accent)" aria-hidden="true">→</span></span></button>
   <div class="stats">
     <div class="stat"><b>${learned().length}</b><span>會說的句子</span></div>
-    <div class="stat"><b>${streakNow()}</b><span>連續天數</span></div>
+    <div class="stat"><b>${weekCount()}<small class="mut" style="font-size:.9rem">/7</small></b><span>本週練習天數</span></div>
     <div class="stat"><b>${LESSONS.filter(l=>S.done[l.id]).length}<small class="mut" style="font-size:.9rem">/${LESSONS.length}</small></b><span>護照章</span></div>
   </div>
+  ${weekStrip()}
   ${phonCard()}
   <div class="card"><div class="row" style="justify-content:space-between"><h3>我的英文護照</h3><span class="small mut">學完一課蓋一章</span></div>${stampGrid()}</div>
   ${todayPhrase()}`;
   bindCommon();
+  const ol=$('#oneline');if(ol)ol.onclick=oneLine;
+  $('#editplan').onclick=()=>planView(()=>go('home'));
 }
 function phonCard(){
   const c=PHONICS.filter(p=>S.done[p.id]).length;
@@ -373,8 +450,7 @@ function stampGrid(){
     return `<button class="stamp ${got?'got':''}" data-lesson="${l.id}" style="--sc:var(${l.sc})"><span class="seal">${esc(l.en)}</span><span class="zh">${esc(l.zh)}</span><span class="cnt">${got?'已完成 · 再練一次':c?c+'/'+l.items.length+' 句':'尚未出發'}</span></button>`}).join('')}</div>`;
 }
 function todayPhrase(){
-  const pool=learned().length?learned():LESSONS[0].items.map((it,i)=>({...it,id:'cafe-'+i}));
-  const d=new Date(), it=pool[(d.getDate()+d.getMonth()*31)%pool.length];
+  const it=todayItem();
   return `<div class="card"><span class="eyebrow">今日一句 · 走路時念念看</span><p class="en" style="font-size:1.5rem">${esc(it.en)}</p><p class="mut">${esc(it.zh)}</p>${playBtns(it.en)}</div>`;
 }
 function bindCommon(){
@@ -545,13 +621,14 @@ function drawReview(){
 let CONFIRM=false;
 function me(){
   const all=learned(), lv=['新學','新學','熟悉','熟悉','穩固','穩固','反射'];
-  const days=Object.keys(S.log).length;
+  const days=Object.keys(S.days).length;
   app.innerHTML=`<div><span class="eyebrow">My English</span><h1>你會說 ${all.length} 句英文</h1><p class="mut" style="margin-top:6px">${all.length?`總共練習了 ${days} 天。點喇叭聽一遍，你會發現自己真的都懂。`:'學完第一課，句子就會出現在這裡。'}</p></div>
   ${[...LESSONS,{...CHATL,items:S.custom||[]}].filter(l=>l.items.some((it,i)=>S.cards[it.id||l.id+'-'+i])).map(l=>`<div class="card"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}</span><h3>${esc(l.zh)}</h3><div class="list">${l.items.map((it,i)=>{const c=S.cards[it.id||l.id+'-'+i];if(!c)return'';return `<div class="li"><div class="t"><p class="en">${esc(it.en)}</p><p class="small mut">${esc(it.zh)}</p></div><div class="row" style="flex-wrap:nowrap"><span class="boxlv">${lv[c.box]}</span><button class="play" data-say="${esc(it.en)}" aria-label="播放 ${esc(it.en)}">${ICON_PLAY}</button></div></div>`}).join('')}</div></div>`).join('')}
   ${all.length?'':`<button class="btn wide" data-lesson="${(nextLesson()||LESSONS[0]).id}">去上第一課</button>`}
-  <div class="card"><h3>設定</h3><p class="small mut">進度只存在這台裝置的瀏覽器裡。換手機或清除瀏覽器資料後會重新開始。</p>
+  <div class="card"><h3>設定</h3><button class="btn ghost" id="plan2">修改我的目標與每日計畫</button><p class="small mut">進度只存在這台裝置的瀏覽器裡。換手機或清除瀏覽器資料後會重新開始。</p>
   ${CONFIRM?`<div class="confirm"><p><b>確定要清除全部進度嗎？</b>護照章和學過的句子都會消失，無法復原。</p><div class="row"><button class="btn ghost" id="no">取消</button><button class="btn" style="background:var(--bad);color:#fff" id="yes">清除</button></div></div>`:`<button class="btn ghost" id="reset">清除進度重新開始</button>`}</div>`;
   bindCommon();
+  $('#plan2').onclick=()=>planView(()=>go('me'));
   if(CONFIRM){$('#no').onclick=()=>{CONFIRM=false;me()};$('#yes').onclick=()=>{CONFIRM=false;S=fresh();OB={pick:new Set()};save();go('home')}}
   else $('#reset').onclick=()=>{CONFIRM=true;me()};
 }
