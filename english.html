@@ -55,7 +55,7 @@ p{margin:0}
 .stamps{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 @media (max-width:460px){.stamps{grid-template-columns:repeat(2,1fr)}}
 .stamp{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 8px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer;text-align:center}
-.seal{width:76px;height:76px;border-radius:50%;border:2px dashed var(--line);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:.62rem;letter-spacing:.04em;text-transform:uppercase;color:var(--mut);line-height:1.15;padding:6px;overflow-wrap:anywhere}
+.seal{width:82px;height:82px;border-radius:50%;border:2px dashed var(--line);display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:.58rem;letter-spacing:.02em;text-transform:uppercase;color:var(--mut);line-height:1.15;padding:4px}
 .stamp.got .seal{border:3px double var(--sc);color:var(--sc);transform:rotate(-8deg)}
 .stamp .zh{font-size:.85rem;font-weight:700}
 .stamp .cnt{font-size:.75rem;color:var(--mut)}
@@ -114,6 +114,16 @@ nav.tabs .in{display:flex;max-width:640px;width:100%}
 .boxlv{font-size:.72rem;color:var(--mut);white-space:nowrap}
 .big-stamp{width:150px;height:150px;margin:8px auto;border-radius:50%;border:5px double var(--sc);color:var(--sc);display:grid;place-items:center;text-align:center;font-family:var(--display);font-weight:800;text-transform:uppercase;letter-spacing:.06em;transform:rotate(-10deg);animation:thump .5s ease-out}
 @keyframes thump{0%{transform:scale(1.6) rotate(-10deg);opacity:.2}70%{transform:scale(.95) rotate(-10deg);opacity:1}100%{transform:scale(1) rotate(-10deg)}}
+/* 自然發音 */
+.grapheme{font-family:var(--display);font-weight:800;font-size:4.2rem;line-height:1;color:var(--accent);letter-spacing:-.02em}
+.zy{font-size:1rem;font-weight:700;background:var(--accsoft);color:var(--accent);border-radius:999px;padding:4px 12px}
+.words{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.wordbtn{font:inherit;font-family:var(--display);font-weight:700;font-size:1.35rem;border:1px solid var(--line);border-bottom-width:3px;background:var(--paper);color:var(--ink);border-radius:12px;padding:12px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.wordbtn svg{width:18px;height:18px;fill:var(--mut)}
+.wordbtn:focus-visible,.gchip:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.gchip{font:inherit;font-family:var(--display);font-weight:700;border:1px dashed var(--line);background:var(--paper);color:var(--mut);border-radius:8px;padding:4px 10px;cursor:pointer}
+.gchip.on{border-style:solid;border-color:var(--accent);color:var(--accent);background:var(--accsoft)}
+span.gchip{cursor:default;color:var(--ink)}
 /* 聊天 */
 .chatcta{font:inherit;color:var(--ink);text-align:left;cursor:pointer;align-items:flex-start}
 .chatcta:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
@@ -278,7 +288,7 @@ function go(t){TAB=t;RUN=null;render();window.scrollTo(0,0)}
 function render(){
   drawTabs();
   if(!S.onboard) return onboard(0);
-  if(RUN) return RUN.kind==='lesson'?drawLesson():drawReview();
+  if(RUN) return RUN.kind==='lesson'?drawLesson():RUN.kind==='phon'?drawPhon():drawReview();
   ({home,lessons,chat,review:reviewIntro,me})[TAB]();
 }
 
@@ -314,19 +324,20 @@ function onboard(step){
       <p class="mut">你認識 ${n} 個英文字，而且會念。你不是從零開始，而是從「已經會一點」開始。<br>接下來我們每天花 5 分鐘，學整句能直接用的英文。</p></div>
     <div class="card"><h3>這個程式怎麼用</h3>
       <div class="why">
+        <div class="item"><span class="n">音</span><p>先學自然發音：用你會的注音當橋樑，看到沒學過的字也念得出來。</p></div>
         <div class="item"><span class="n">聽</span><p>每句都有真人速度和慢速發音，先聽懂再說。</p></div>
         <div class="item"><span class="n">說</span><p>跟著念出聲 3 次。開口比看懂更能記住。</p></div>
         <div class="item"><span class="n">換</span><p>同一句換一個字就變新句子，一句當十句用。</p></div>
         <div class="item"><span class="n">複</span><p>快忘記時才複習。每學完一課就蓋一個護照章。</p></div>
       </div></div>
-    <button class="btn wide" id="ob3">開始第一課：咖啡店點餐</button>`;
-    $('#ob3').onclick=()=>{S.onboard=true;save();startLesson('cafe')};
+    <button class="btn wide" id="ob3">開始第一課：自然發音</button>`;
+    $('#ob3').onclick=()=>{S.onboard=true;save();startLesson('ph1')};
   }
   window.scrollTo(0,0);
 }
 
 // ===== 首頁 =====
-function nextLesson(){return LESSONS.find(l=>!S.done[l.id])}
+function nextLesson(){return [...PHONICS,...LESSONS].find(l=>!S.done[l.id])}
 function home(){
   const due=dueList().length, nl=nextLesson(), h=new Date().getHours();
   const greet = h<11?'早安':h<18?'午安':'晚安';
@@ -344,11 +355,18 @@ function home(){
   <div class="stats">
     <div class="stat"><b>${learned().length}</b><span>會說的句子</span></div>
     <div class="stat"><b>${streakNow()}</b><span>連續天數</span></div>
-    <div class="stat"><b>${Object.keys(S.done).length}<small class="mut" style="font-size:.9rem">/${LESSONS.length}</small></b><span>護照章</span></div>
+    <div class="stat"><b>${LESSONS.filter(l=>S.done[l.id]).length}<small class="mut" style="font-size:.9rem">/${LESSONS.length}</small></b><span>護照章</span></div>
   </div>
+  ${phonCard()}
   <div class="card"><div class="row" style="justify-content:space-between"><h3>我的英文護照</h3><span class="small mut">學完一課蓋一章</span></div>${stampGrid()}</div>
   ${todayPhrase()}`;
   bindCommon();
+}
+function phonCard(){
+  const c=PHONICS.filter(p=>S.done[p.id]).length;
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h3>第一步：自然發音</h3><span class="small mut">${c}/${PHONICS.length} 課</span></div>
+  <div class="prog"><i style="width:${c/PHONICS.length*100}%"></i></div>
+  <div class="row">${PHONICS.map(p=>`<button class="gchip ${S.done[p.id]?'on':''}" data-lesson="${p.id}" title="${esc(p.zh)}">${esc(p.en)}</button>`).join('')}</div></div>`;
 }
 function stampGrid(){
   return `<div class="stamps">${LESSONS.map(l=>{const got=S.done[l.id],c=l.items.filter((_,i)=>S.cards[l.id+'-'+i]).length;
@@ -367,7 +385,9 @@ function bindCommon(){
 
 // ===== 情境課列表 =====
 function lessons(){
-  app.innerHTML = `<div><span class="eyebrow">8 個生活情境</span><h1>選一個你最想用的地方</h1><p class="mut" style="margin-top:6px">不用照順序。先學你下個月真的會遇到的情境，最有動力。</p></div>
+  app.innerHTML = `<div><span class="eyebrow">第一步 · Phonics</span><h1>自然發音：看到字就會念</h1><p class="mut" style="margin-top:6px">不用 KK 音標，也不用死背每個字怎麼念。學會字母和聲音的規則，沒看過的字也能念出七、八成。建議從這裡開始。</p></div>
+  <div class="card"><div class="list">${PHONICS.map((u,k)=>{const d=S.done[u.id];return `<div class="li"><div class="t"><span class="eyebrow" style="color:var(${u.sc})">第 ${k+1} 課 · ${esc(u.en)}${d?' · 已完成':''}</span><p><b>${esc(u.zh)}</b></p><p class="en" style="font-size:1rem;color:var(--mut)">${esc(u.sounds.map(s=>s.g).join('  '))}</p></div><button class="btn ${d?'ghost':''}" data-lesson="${u.id}">${d?'再練':'開始'}</button></div>`}).join('')}</div></div>
+  <div style="margin-top:8px"><span class="eyebrow">第二步 · 8 個生活情境</span><h1>選一個你最想用的地方</h1><p class="mut" style="margin-top:6px">不用照順序。先學你下個月真的會遇到的情境，最有動力。</p></div>
   ${LESSONS.map(l=>{const got=S.done[l.id];return `<div class="card"><div class="row" style="justify-content:space-between;flex-wrap:nowrap"><div style="min-width:0"><span class="eyebrow" style="color:var(${l.sc})">${esc(l.en)}${got?' · 已蓋章':''}</span><h2>${esc(l.zh)}</h2></div></div>
     <p class="mut small">${esc(l.scene)}</p><p class="en" style="font-size:1.1rem">「${esc(l.items[0].en)}」</p>
     <button class="btn ${got?'ghost':''}" data-lesson="${l.id}">${got?'再練一次':'開始這課 · 7 句'}</button></div>`}).join('')}`;
@@ -376,6 +396,8 @@ function lessons(){
 
 // ===== 上課：學 → 練 → 蓋章 =====
 function startLesson(id){
+  const u=PHONICS.find(x=>x.id===id);
+  if(u){RUN={kind:'phon',l:u,phase:'intro',i:0,said:0,q:[],qi:0,ok:0};touch();render();window.scrollTo(0,0);return}
   const l=LESSONS.find(x=>x.id===id);
   RUN={kind:'lesson',l,phase:'intro',i:0,said:0,swap:0,q:[],qi:0,ok:0};
   touch();render();window.scrollTo(0,0);
@@ -532,6 +554,108 @@ function me(){
   bindCommon();
   if(CONFIRM){$('#no').onclick=()=>{CONFIRM=false;me()};$('#yes').onclick=()=>{CONFIRM=false;S=fresh();OB={pick:new Set()};save();go('home')}}
   else $('#reset').onclick=()=>{CONFIRM=true;me()};
+}
+
+// ===== 自然發音：用注音當拐杖，學字母和聲音的規則 =====
+// g=字母、zy=像哪個注音、words=代表字、pair=加上 e 前後對照、quiz=[正確字, 干擾字…]（聽音選字）
+const PHONICS = [
+ {id:'ph1', en:'Consonants 1', zh:'像注音的子音（一）', sc:'--st1', scene:'好消息：很多英文子音，你從小學的注音就會了！只要記得一件事：英文子音念完不要加「ㄜ」。b 是「ㄅ」，不是「ㄅㄜ」。', sounds:[
+  {g:'b', zy:'ㄅ', tip:'雙唇閉緊再彈開，喉嚨要震動（手摸喉嚨會麻麻的）。', words:['bus','bag','bed']},
+  {g:'p', zy:'ㄆ', tip:'嘴型跟 b 一樣，但喉嚨不震動，噴一口氣（手放嘴前會感覺到風）。', words:['pen','park','pizza']},
+  {g:'m', zy:'ㄇ', tip:'雙唇閉起來，用鼻子出聲「嗯」。', words:['milk','map','menu']},
+  {g:'f', zy:'ㄈ', tip:'上排牙齒輕輕碰下唇，吹氣。', words:['fish','fan','coffee']},
+  {g:'d', zy:'ㄉ', tip:'舌尖頂在上排牙齒後面，彈開，喉嚨震動。', words:['dog','desk','red']},
+  {g:'t', zy:'ㄊ', tip:'位置跟 d 一樣，喉嚨不震動、噴氣。', words:['tea','taxi','cat']},
+  {g:'n', zy:'ㄋ', tip:'舌尖頂在上排牙齒後面，用鼻子出聲。', words:['no','nine','sun']},
+  {g:'l', zy:'ㄌ', tip:'舌尖頂住上排牙齒後面。在字尾時（ball），舌頭停在那裡就好。', words:['love','lamp','ball']}
+ ], quiz:[['bat','pat','mat'],['pen','ten','den'],['fan','man','pan'],['dog','log','fog'],['ten','den','pen'],['nap','lap','map']]},
+ {id:'ph2', en:'Consonants 2', zh:'像注音的子音（二）', sc:'--st4', scene:'再 8 個子音，大部分也能用注音幫忙。注音只是起步的拐杖，最後還是以耳朵聽到的聲音為準，所以每個音都要按喇叭聽。', sounds:[
+  {g:'g', zy:'ㄍ', tip:'舌根頂住上顎再彈開，喉嚨震動。', words:['go','game','bag']},
+  {g:'c / k', zy:'ㄎ', tip:'位置跟 g 一樣，不震動、噴氣。c 和 k 通常都念這個音。', words:['cake','cat','key']},
+  {g:'h', zy:'ㄏ', tip:'輕輕哈一口氣就好，比注音的ㄏ更輕，喉嚨不要用力。', words:['hot','happy','hotel']},
+  {g:'s', zy:'ㄙ', tip:'牙齒靠近，像蛇一樣「嘶——」。', words:['sun','sofa','bus']},
+  {g:'z', zy:'', tip:'嘴型跟 s 一樣，但喉嚨震動，像蜜蜂「滋滋滋」。', words:['zoo','zero','size']},
+  {g:'w', zy:'ㄨ', tip:'嘴唇先嘟圓，再快速打開。', words:['water','window','wow']},
+  {g:'y', zy:'ㄧ', tip:'在字首時念很快的「ㄧ」。', words:['yes','yellow','you']},
+  {g:'j', zy:'ㄐ', tip:'像「ㄐ」但嘴巴嘟一點，喉嚨震動。', words:['job','juice','jam']}
+ ], quiz:[['goat','coat','boat'],['cap','gap','tap'],['hat','cat','sat'],['zip','sip','tip'],['wet','yet','jet'],['jam','yam','ham']]},
+ {id:'ph3', en:'Short Vowels', zh:'五個短母音', sc:'--st2', scene:'母音 a e i o u 在短短的字裡（像 cat、bed），念「短母音」。記住 5 個代表字，就能念出上千個字。', sounds:[
+  {g:'a', zy:'ㄝ＋ㄚ', tip:'介於「ㄝ」和「ㄚ」中間。嘴巴張大、嘴角往兩邊拉，像有點驚訝。', words:['cat','bag','apple']},
+  {g:'e', zy:'ㄝ', tip:'像「ㄝ」，嘴巴半開，短短的。', words:['bed','pen','egg']},
+  {g:'i', zy:'ㄧ', tip:'很短、很放鬆的「ㄧ」，不要拉長也不要咧嘴。', words:['sit','pig','milk']},
+  {g:'o', zy:'ㄚ', tip:'美式念法像「ㄚ」，嘴巴張圓。', words:['hot','dog','box']},
+  {g:'u', zy:'ㄜ', tip:'很短、很放鬆的「ㄜ」，像嘆一口氣。', words:['cup','bus','sun']}
+ ], quiz:[['bat','bet','but'],['pen','pin','pan'],['hot','hat','hut'],['cup','cap','cop'],['sit','set','sat'],['bag','beg','big']]},
+ {id:'ph4', en:'Magic E', zh:'魔法 e 與長母音', sc:'--st3', scene:'字尾的 e 不發音，但它有魔法：讓前面的母音改念「字母本身的名字」。cap 變 cape、kit 變 kite。學會這招，很多字一看就會念。', sounds:[
+  {g:'a_e', zy:'ㄟ', tip:'母音念 A 的名字「ㄟ」。', words:['cake','name','late'], pair:['cap','cape']},
+  {g:'i_e', zy:'ㄞ', tip:'母音念 I 的名字「ㄞ」。', words:['bike','five','nice'], pair:['kit','kite']},
+  {g:'o_e', zy:'ㄡ', tip:'母音念 O 的名字「ㄡ」。', words:['home','nose','phone'], pair:['hop','hope']},
+  {g:'u_e', zy:'ㄧㄨ', tip:'母音念 U 的名字「ㄧㄨ」。', words:['cute','huge','use'], pair:['cut','cute']},
+  {g:'ee / ea', zy:'ㄧ', tip:'兩個 e 或 ea 在一起，念 E 的名字，拉長的「ㄧ」。', words:['see','tea','meet'], pair:['met','meet']}
+ ], quiz:[['cape','cap','cup'],['kite','kit','cat'],['hope','hop','hip'],['cute','cut','cat'],['meet','met','mat'],['note','not','nut']]},
+ {id:'ph5', en:'Letter Teams', zh:'字母組合', sc:'--st1', scene:'兩個字母黏在一起，會變成一個新的音。這 6 組在生活英文裡到處都是。', sounds:[
+  {g:'sh', zy:'ㄒ', tip:'像叫人安靜的「噓——」，嘴巴嘟起來。', words:['shop','fish','she']},
+  {g:'ch', zy:'ㄑ', tip:'像「ㄑ」，嘴巴嘟起來，短短的。', words:['chicken','lunch','cheese']},
+  {g:'th', zy:'', tip:'舌尖輕輕放在上下牙齒中間，吹氣。不是「ㄙ」！照鏡子要看得到一點舌頭。', words:['think','three','thanks']},
+  {g:'ph', zy:'ㄈ', tip:'ph 就念 f。', words:['phone','photo','elephant']},
+  {g:'ck', zy:'ㄎ', tip:'念 k，通常出現在短母音後面。', words:['back','duck','check']},
+  {g:'ng', zy:'ㄥ', tip:'用鼻子收尾，像「ㄥ」的尾巴，舌根往上抬。', words:['sing','long','morning']}
+ ], quiz:[['shop','chop','top'],['chin','shin','thin'],['think','sink','pink'],['three','tree','free'],['sing','sin','sit'],['duck','dock','dog']]},
+ {id:'ph6', en:'Tricky Sounds', zh:'台灣人最容易卡的音', sc:'--st2', scene:'這幾組是台灣人最常混在一起的音。只要知道嘴巴怎麼放，耳朵很快就能分得出來，別人也更聽得懂你。', sounds:[
+  {g:'th ↔ s', zy:'', tip:'th 舌頭要露出來一點；s 牙齒合起來，舌頭藏在裡面。', words:['think','sink','mouth','mouse']},
+  {g:'v ↔ b', zy:'', tip:'v 是上牙咬下唇再震動（像 f 加聲音），不是「ㄅ」。b 是雙唇碰在一起。', words:['very','berry','vest','best']},
+  {g:'r ↔ l', zy:'', tip:'r 舌頭往後捲，不碰任何地方，嘴巴嘟一點；l 舌尖碰上排牙齒後面。', words:['right','light','road','load']},
+  {g:'n ↔ ng', zy:'', tip:'字尾 n 舌尖頂上面（ㄣ）；ng 舌根往上抬（ㄥ）。', words:['thin','thing','win','wing']},
+  {g:'字尾子音', zy:'', tip:'字尾的 k、d、t、p 不要加「ㄜ」。book 不是「book-ㄜ」，只做出嘴型、輕輕收掉就好。', words:['book','good','cake','stop']}
+ ], quiz:[['think','sink','pink'],['very','berry','ferry'],['right','light','night'],['road','load','toad'],['thing','thin','sing'],['vest','best','west']]}
+];
+function drawPhon(){
+  const R=RUN,u=R.l,n=u.sounds.length,total=n+(R.q.length||u.quiz.length);
+  const pos=R.phase==='intro'?0:R.phase==='learn'?R.i:R.phase==='practice'?n+R.qi:total;
+  const head=`<div class="lessonhead"><button class="x" id="quit" aria-label="離開這課">×</button><div class="prog"><i style="width:${pos/total*100}%"></i></div><span class="small mut" style="font-variant-numeric:tabular-nums">${Math.min(pos,total)}/${total}</span></div>`;
+  if(R.phase==='intro'){
+    app.innerHTML=head+`<div class="cover" style="background:var(${u.sc})"><span class="eyebrow">Phonics · ${esc(u.en)}</span><h1>${esc(u.zh)}</h1><p>${esc(u.scene)}</p></div>
+    <div class="card"><h3>這課會這樣進行</h3><p class="mut">每個音：先看嘴巴怎麼放，再聽代表字、跟著念。最後做 ${u.quiz.length} 題「聽音選字」，訓練耳朵分辨很像的音。</p>
+    <div class="row">${u.sounds.map(s=>`<span class="gchip">${esc(s.g)}</span>`).join('')}</div></div>
+    <button class="btn wide" id="go">開始</button>`;
+    $('#go').onclick=()=>{R.phase='learn';render()};
+  } else if(R.phase==='learn'){
+    const s=u.sounds[R.i];
+    app.innerHTML=head+`<div class="card">
+      <div class="row" style="align-items:baseline"><span class="grapheme">${esc(s.g)}</span>${s.zy?`<span class="zy">像注音「${esc(s.zy)}」</span>`:''}</div>
+      <div class="tip">${esc(s.tip)}</div>
+      <p class="small mut">點每個字聽發音，注意 <b>${esc(s.g)}</b> 的聲音：</p>
+      <div class="words">${s.words.map(w=>`<button class="wordbtn" data-say="${esc(w)}">${esc(w)}<span aria-hidden="true">${ICON_PLAY}</span></button>`).join('')}</div>
+      ${s.pair?`<div class="tip"><span class="small mut">加上魔法 e：</span><div class="row"><button class="wordbtn" data-say="${esc(s.pair[0])}">${esc(s.pair[0])}</button><span class="en" aria-hidden="true">→</span><button class="wordbtn" data-say="${esc(s.pair[1])}">${esc(s.pair[1])}</button></div></div>`:''}
+    </div>
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h3>跟著念出聲 3 次</h3><p class="small mut">對著鏡子念，看看嘴型對不對。</p></div><div class="dots">${[0,1,2].map(k=>`<i class="${k<R.said?'on':''}"></i>`).join('')}</div></div>
+      <button class="btn ghost wide" id="said">我念了一次</button></div>
+    <button class="btn wide" id="next">${R.i<n-1?'下一個音':'開始聽音選字'}</button>`;
+    if(!R.spoke){R.spoke=true;speak(s.words.join(', '),true)}
+    $('#said').onclick=()=>{if(R.said<3){R.said++;speak(s.words[R.said-1]||s.words[0])}render()};
+    $('#next').onclick=()=>{R.said=0;R.spoke=false;if(R.i<n-1)R.i++;else{R.phase='practice';R.q=shuffle(u.quiz.map(([a,...d])=>({type:'pick',it:{en:a},opts:shuffle([a,...d])})));R.qi=0}render();window.scrollTo(0,0)};
+  } else if(R.phase==='practice'){
+    const q=R.q[R.qi];
+    app.innerHTML=head+`<div class="card"><span class="eyebrow">聽音選字</span><h2>聽聽看，是哪一個字？</h2>${playBtns(q.it.en)}
+      <div class="opts">${q.opts.map(o=>`<button class="opt en" style="font-size:1.4rem" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div></div><div id="fb"></div>`;
+    if(!q.played){q.played=true;speak(q.it.en)}
+    app.querySelectorAll('.opt').forEach(b=>b.onclick=()=>{
+      if(q.done)return;q.done=true;const ok=b.dataset.v===q.it.en;
+      app.querySelectorAll('.opt').forEach(x=>{if(x.dataset.v===q.it.en)x.classList.add('right');else if(x===b)x.classList.add('wrong')});
+      feedback(ok,q.it.en);
+    });
+  } else {
+    const first=!S.done[u.id];S.done[u.id]=true;S.log[today()]=(S.log[today()]||0)+1;touch();save();
+    const nx=nextLesson(), cnt=PHONICS.filter(p=>S.done[p.id]).length;
+    app.innerHTML=`<div class="card center" style="--sc:var(${u.sc})"><span class="eyebrow">${first?'過關！':'複習完成'} · 自然發音 ${cnt}/${PHONICS.length}</span>
+      <div class="big-stamp"><span>Phonics<br><small style="font-size:.7rem">${esc(u.en)}</small></span></div>
+      <h2>你學會了 ${u.sounds.length} 個音：${u.sounds.map(s=>esc(s.g)).join('、')}</h2>
+      <p class="mut">之後在情境課看到沒學過的字，先試著用這些規則念念看，再按喇叭對答案。</p></div>
+      ${nx?`<button class="btn wide" data-lesson="${nx.id}">下一課：${esc(nx.zh)}</button>`:''}
+      <button class="btn ghost wide" id="home">回到今天</button>`;
+    RUN=null;drawTabs();bindCommon();$('#home').onclick=()=>go('home');window.scrollTo(0,0);
+  }
+  const qb=$('#quit');if(qb)qb.onclick=()=>go(TAB);
 }
 
 // ===== AI 聊天夥伴 Emma：用簡單英文聊天，順便幫你改句子 =====
