@@ -2417,12 +2417,45 @@ function nativeLive(codes){
       out[m.c]={price:z,y,o:n(m.o),h:n(m.h),l:n(m.l),v:n(m.v),tv:n(m.tv),time:m.t||m['%'],d:m.d,chg_pct:z&&y?Math.round((z/y-1)*10000)/100:null,name:m.n,asks:lv('a','f'),bids:lv('b','g')}})}
   return out;
 }
+// 網頁版即時報價：證交所的即時 API 不能從網頁直接讀（沒開跨網域），改用鉅亨網的報價（有開），讀不到時退回雲端最近一次的報價
+async function webLive(codes){const out={},one=codes.length===1;
+  const sym=c=>c==='t00'?'TWS:TSE01:INDEX':c==='o00'?'TWS:OTC01:INDEX':'TWS:'+c+':STOCK';
+  for(let i=0;i<codes.length;i+=80){
+    try{const js=await (await fetch('https://ws.api.cnyes.com/ws/api/v1/quote/quotes/'+codes.slice(i,i+80).map(sym).join(',')+'?column='+(one?'K,E,KEY,M,AI':'D'),{cache:'no-store'})).json();
+      (js.data||[]).forEach(x=>{const id=x['200010'],k=id==='TSE01'?'t00':id==='OTC01'?'o00':id,t=new Date(((x['200007']||0)+8*3600)*1000),z=n=>String(n).padStart(2,'0');
+        if(x['6']==null)return;
+        const o={price:x['6'],y:x['21'],o:x['19'],h:x['12'],l:x['13'],v:x['800001'],chg_pct:x['56'],name:x['200009'],src:'cnyes',
+          d:t.getUTCFullYear()+z(t.getUTCMonth()+1)+z(t.getUTCDate()),time:z(t.getUTCHours())+':'+z(t.getUTCMinutes())+':'+z(t.getUTCSeconds())};
+        if(x['436']!=null){o.bids=[0,1,2,3,4].map(j=>[x[436+j],x[200014+j]]).filter(b=>b[0]);o.asks=[0,1,2,3,4].map(j=>[x[441+j],x[200019+j]]).filter(b=>b[0])}
+        out[k]=o})}catch(e){}}
+  return out}
+// 當天每分鐘走勢（鉅亨網），60 秒內不重抓
+const IDAY={};
+async function fetchIntraday(code){const c=IDAY[code];if(c&&Date.now()-c.at<60000)return c;
+  try{const js=await (await fetch('https://ws.api.cnyes.com/ws/api/v1/charting/history?resolution=1&symbol=TWS:'+code+':STOCK&quote=1',{cache:'no-store'})).json(),x=js.data||{};
+    if(!x.t||!x.t.length)return null;const pts=x.t.map((t,i)=>[t,x.c[i]]).filter(p=>p[1]!=null).sort((a,b)=>a[0]-b[0]);
+    const t0=new Date((pts[0][0]+8*3600)*1000),z=n=>String(n).padStart(2,'0'),d=t0.getUTCFullYear()+z(t0.getUTCMonth()+1)+z(t0.getUTCDate());
+    const ss=(x.session||[])[0]||[pts[0][0],pts[pts.length-1][0]];
+    return IDAY[code]={at:Date.now(),d,pts,s0:ss[0],s1:ss[1],y:(x.quote||{})['21']}}catch(e){return null}}
+async function loadDtIntraday(){if(!S||NATIVE||TAB!=='daytrade')return;let got=false;
+  await Promise.all((R.daytrade||[]).map(async r=>{const c=IDAY[r.code];if(c&&Date.now()-c.at<60000)return;if(await fetchIntraday(r.code))got=true}));
+  const ae=document.activeElement;if(got&&TAB==='daytrade'&&!(ae&&/INPUT|SELECT|TEXTAREA/.test(ae.tagName)))render()}
+// 盤中走勢小圖：今天每分鐘價格＋昨收（灰線）＋進場 / 停損 / 目標線
+function miniIntra(r,I){const p=r.plan||{},lv=[[p.entry,'進場','#3b82f6'],[p.stop,'停損','var(--down)'],[p.t1,'目標一','var(--up)'],[p.t2,'目標二','var(--up)']].filter(x=>x[0]);
+  const P=I.pts,W=330,H=120,R0=72,y0=I.y||r.close,vals=[...P.map(x=>x[1]),y0,...lv.map(x=>x[0])],mx=Math.max(...vals),mn=Math.min(...vals),rg=mx-mn||1;
+  const X=t=>((t-I.s0)/((I.s1-I.s0)||1)*(W-R0)).toFixed(1),Y=v=>(4+(mx-v)/rg*(H-8)).toFixed(1),last=P[P.length-1][1];
+  let g=`<line x1="0" x2="${W-R0}" y1="${Y(y0)}" y2="${Y(y0)}" stroke="var(--mut)" stroke-dasharray="2 3"/>`;
+  g+=lv.map(x=>`<line x1="0" x2="${W-R0}" y1="${Y(x[0])}" y2="${Y(x[0])}" stroke="${x[2]}" stroke-dasharray="4 3"/><text x="${W-R0+3}" y="${+Y(x[0])+4}" font-size="9.5" fill="${x[2]}">${x[1]} ${f(x[0])}</text>`).join('');
+  g+=`<polyline fill="none" stroke="${last>=y0?'var(--up)':'var(--down)'}" stroke-width="1.8" points="${P.map(x=>X(x[0])+','+Y(x[1])).join(' ')}"/>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin:6px 0;display:block">${g}</svg><div class="mut" style="font-size:11px;margin-top:-4px">今天 9:00～13:30 每分鐘走勢（灰線是昨收），虛線是進場 / 停損 / 目標價</div>`}
 async function api(path){
   if(!S)return (await fetch(path)).json();
   const u=new URL(path,'http://x'),q=u.searchParams.get('code')||'';
   if(u.pathname==='/api/status')return{state:'ready',progress:100,msg:''};
   if(u.pathname==='/api/report')return S.report;
-  if(u.pathname==='/api/live')return NATIVE?nativeLive((u.searchParams.get('codes')||'').split(',').filter(Boolean)):(S.live||{});
+  if(u.pathname==='/api/live'){const cs=(u.searchParams.get('codes')||'').split(',').filter(Boolean);if(NATIVE)return nativeLive(cs);
+    const w=await webLive(cs),o={};cs.forEach(c=>{const a=(S.live||{})[c],b=w[c];o[c]=b&&(!a||b.d>=a.d)?Object.assign({},a&&!b.bids?{bids:null,asks:null}:{},b):a});
+    for(const c in o)if(!o[c])delete o[c];return o}
   if(u.pathname==='/api/stock'){const ks=Object.keys(S.stocks);
     const c=S.stocks[q]?q:ks.find(k=>S.stocks[k].name===q)||ks.find(k=>S.stocks[k].name.includes(q));
     return c?S.stocks[c]:{error:'找不到「'+q+'」，請輸入上市櫃股票代號或名稱'}}
@@ -2662,7 +2695,7 @@ function render(){
   const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['etf','🏦 ETF 買賣'],['divs','💰 配息股'],['nolimit','🚀 無漲跌幅'],['track','🎯 準確度'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
   $('#tabs').innerHTML=tabsHTML(tabs);
   if($('#newsslot'))$('#newsslot').innerHTML=newsPanel();
-  if(TAB==='etf')setTimeout(fillEtf);if(TAB==='divs')setTimeout(fillDiv);
+  if(TAB==='daytrade')setTimeout(loadDtIntraday);if(TAB==='etf')setTimeout(fillEtf);if(TAB==='divs')setTimeout(fillDiv);
   if(TAB==='all'&&$('#alist')){$('#tabs').innerHTML=tabsHTML(tabs);fillAll();return}
   let h='';
   const bear=['空頭','短線轉弱'].includes(R.market.mood)?`<div class="status down" style="margin-bottom:12px">⚠️ 大盤目前為「${R.market.mood}」，個股推薦成功率會下降，${R.market.position}。</div>`:'';
@@ -2685,7 +2718,7 @@ function render(){
       <div><span class="${r.trend==='偏多'?'up':r.trend==='偏空'?'down':''}">${r.trend}</span> <span class="mut" style="font-size:12px">${r.susp?'只能先買後賣':'可雙向'}</span></div></div>
       <div style="text-align:right"><div class="${cls(c)}" style="font-size:22px;font-weight:800">${f(p)}</div><div class="${cls(c)}" style="font-size:13px">${sg(c)}${f(c)}%</div>
       <div class="mut" style="font-size:11px">${nd?'即時 '+(Lv.time||''):R.date.slice(5)+' 收盤'}</div></div></div>
-      ${miniK(r,nd?Lv:null)}
+      ${IDAY[r.code]&&IDAY[r.code].d>R.date.replace(/-/g,'')?miniIntra(r,IDAY[r.code]):miniK(r,nd?Lv:null)}
       <div class="mut" style="font-size:12px">波動 ${f(r.atr_pct,1)}%・昨日當沖比 ${r.ratio!=null?f(r.ratio,1)+'%':'-'}${nd&&Lv.v?'・今日量 '+f(Lv.v,0)+' 張':''}</div>
       ${dtPlan(r)}</div>`}).join('')||'<div class=mut>今天沒有符合條件的股票</div>'}</div>
     <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。風報比＝可能賺的價差 ÷ 停損會虧的價差，大於 1.5 比較值得做。以上是依昨天資料算出的參考計畫，不是保證獲利。</div>`}
@@ -2870,20 +2903,18 @@ let liveTimer=null,firstLive=true;
 async function pollLive(once){
   clearTimeout(liveTimer);
   if(S){$('#refbtn').hidden=true}
-  if(S&&!NATIVE){LIVE=Object.assign({},S.live);render();
-    $('#livetxt').textContent='更新於 '+S.generated;
-    if(SITE&&inSession()){checkAlerts(true);liveTimer=setTimeout(()=>{if($('#modal').style.display!=='flex'&&$('#chat').hidden)location.reload();else pollLive()},10*60000)}
-    return}
+  if(S&&!NATIVE&&firstLive){LIVE=Object.assign({},S.live);render()}
   const on=inSession();
   if(on||firstLive||once){
     try{const d=await (await api('/api/live?codes='+liveCodes().join(',')));
       // 只採用不比分析資料日舊的報價
       for(const k in d){if(d[k].d>=R.date.replace(/-/g,'')||on)LIVE[k]=d[k]}
-      render();checkAlerts();}catch(e){}
+      // 正在輸入時不重畫，免得打到一半的數字被清掉
+      const ae=document.activeElement;if(!(ae&&/INPUT|SELECT|TEXTAREA/.test(ae.tagName)))render();checkAlerts(S&&!NATIVE);}catch(e){}
     firstLive=false;
   }
   $('#dot').className='live-dot'+(on?' on':'');
-  $('#livetxt').textContent=on?'盤中即時 · 每 15 秒更新':'非交易時段（顯示收盤資料）';
+  const tm=(LIVE.t00||{}).time;$('#livetxt').textContent=on?'盤中即時 · 每 15 秒更新'+(tm?'（'+tm+'）':''):'非交易時段（顯示收盤資料）';
   if(!once)liveTimer=setTimeout(pollLive,on?15000:60000);
 }
 
@@ -3115,7 +3146,7 @@ function niu(mood = 'happy', cls = '') {
 const INTRA={};let DTIMER=null;
 function closeModal(){$('#modal').style.display='none';clearTimeout(DTIMER);DTIMER=null}
 function liveSecHTML(d){
-  if(S&&!NATIVE)return `<div class="sec"><h3>即時買賣量（五檔）</h3><div class="mut" style="font-size:13px">${SITE?'網站版盤中每 30 分鐘更新一次報價快照。要每 10 秒更新的五檔與盤中走勢，請用 Android App 或電腦版。':'手機雲端版無法連線證交所即時報價（盤中每小時檢查一次你的自選股並推播提醒）。要每 15 秒更新的五檔與盤中走勢，請用電腦版。'}</div></div>`;
+  if(S&&!NATIVE&&!SITE)return `<div class="sec"><h3>即時買賣量（五檔）</h3><div class="mut" style="font-size:13px">${SITE?'網站版盤中每 30 分鐘更新一次報價快照。要每 10 秒更新的五檔與盤中走勢，請用 Android App 或電腦版。':'手機雲端版無法連線證交所即時報價（盤中每小時檢查一次你的自選股並推播提醒）。要每 15 秒更新的五檔與盤中走勢，請用電腦版。'}</div></div>`;
   return `<div class="sec" id="livesec"><h3>即時買賣量（五檔）與盤中走勢</h3><div id="livebox" class="mut">連線中…</div></div>`;
 }
 function renderLiveBox(code){
@@ -3124,16 +3155,17 @@ function renderLiveBox(code){
   const mx=Math.max(1,...L.bids.map(x=>x[1]),...L.asks.map(x=>x[1]));
   const row=(x,c)=>`<tr><td class="${c}">${f(x[0])}</td><td>${f(x[1],0)}<span class="vbar" style="width:${x[1]/mx*36}px;background:var(--${c==='up'?'up':'down'})"></span></td></tr>`;
   const bsum=L.bids.reduce((a,x)=>a+x[1],0),asum=L.asks.reduce((a,x)=>a+x[1],0);
-  const pts=INTRA[code]||[];let chart='';
+  const I=IDAY[code],pts=I&&I.d>=R.date.replace(/-/g,'')?I.pts.map(x=>{const t=new Date((x[0]+8*3600)*1000);return[String(t.getUTCHours()).padStart(2,'0')+':'+String(t.getUTCMinutes()).padStart(2,'0'),x[1]]}):(INTRA[code]||[]);let chart='';
   if(pts.length>1){const ps=pts.map(x=>x[1]),hi=Math.max(...ps,L.y||ps[0]),lo=Math.min(...ps,L.y||ps[0]),W=360,H=110,X=i=>i/(pts.length-1)*(W-10)+5,Y=v=>8+(hi-v)/((hi-lo)||1)*(H-16);
-    chart=`<svg class="chart" viewBox="0 0 ${W} ${H}"><line x1="0" x2="${W}" y1="${Y(L.y)}" y2="${Y(L.y)}" stroke="var(--mut)" stroke-dasharray="4 3"/><polyline fill="none" stroke="${L.price>=L.y?'var(--up)':'var(--down)'}" stroke-width="2" points="${pts.map((x,i)=>X(i).toFixed(1)+','+Y(x[1]).toFixed(1)).join(' ')}"/><text x="6" y="14" font-size="11" fill="var(--mut)">今日盤中（開著網頁時記錄，${pts[0][0]}～${pts[pts.length-1][0]}）</text></svg>`}
+    chart=`<svg class="chart" viewBox="0 0 ${W} ${H}"><line x1="0" x2="${W}" y1="${Y(L.y)}" y2="${Y(L.y)}" stroke="var(--mut)" stroke-dasharray="4 3"/><polyline fill="none" stroke="${L.price>=L.y?'var(--up)':'var(--down)'}" stroke-width="2" points="${pts.map((x,i)=>X(i).toFixed(1)+','+Y(x[1]).toFixed(1)).join(' ')}"/><text x="6" y="14" font-size="11" fill="var(--mut)">今日盤中 ${pts[0][0]}～${pts[pts.length-1][0]}</text></svg>`}
   box.innerHTML=`<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline"><b style="font-size:20px" class="${cls(L.chg_pct)}">${f(L.price)}</b><span class="${cls(L.chg_pct)}">${sg(L.chg_pct)}${f(L.chg_pct)}%</span>
-    <span class="mut">${L.time||''}・總量 ${f(L.v,0)} 張・單量 ${f(L.tv,0)} 張</span></div>
+    <span class="mut">${L.time||''}・總量 ${f(L.v,0)} 張・${L.tv!=null?'單量 '+f(L.tv,0)+' 張':''}</span></div>
     <div class="five" style="margin-top:6px"><div><b class="down">委賣（賣方）</b><table>${[...L.asks].reverse().map(x=>row(x,'down')).join('')}</table></div><div><b class="up">委買（買方）</b><table>${L.bids.map(x=>row(x,'up')).join('')}</table></div></div>
     <div class="mut" style="font-size:12.5px;margin-top:4px">五檔委買 ${f(bsum,0)} 張 / 委賣 ${f(asum,0)} 張：${bsum>asum*1.3?'買方掛單較多，承接力道強':asum>bsum*1.3?'賣方掛單較多，上方賣壓重':'買賣力道接近'}</div>${chart}`;
 }
 async function detailLive(code){
-  clearTimeout(DTIMER);if((S&&!NATIVE)||!$('#livebox')||$('#modal').style.display==='none')return;
+  clearTimeout(DTIMER);if((S&&!NATIVE&&!SITE)||!$('#livebox')||$('#modal').style.display==='none')return;
+  if(S&&!NATIVE)await fetchIntraday(code);
   try{const d=await api('/api/live?codes='+code);if(d[code]){LIVE[code]=d[code];const L=d[code];if(inSession()&&L.price){(INTRA[code]=INTRA[code]||[]).push([L.time||'',L.price]);if(INTRA[code].length>600)INTRA[code].shift()}}}catch(e){}
   renderLiveBox(code);checkAlerts();
   DTIMER=setTimeout(()=>detailLive(code),inSession()?10000:60000);
