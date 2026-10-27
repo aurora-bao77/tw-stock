@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8765
@@ -57,7 +57,7 @@ FUND = {}      # code -> (pe, yield, pb)
 
 def log(msg):
     STATUS["msg"] = msg
-    print(datetime.now().strftime("%H:%M:%S"), msg, flush=True)
+    print(tw_now().strftime("%H:%M:%S"), msg, flush=True)
 
 
 def http_get(url, timeout=30, retries=3):
@@ -117,6 +117,11 @@ def load_cache(kind, d):
 def save_cache(kind, d, obj):
     with open(cache_path(kind, d), "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, separators=(",", ":"))
+
+
+def tw_now():
+    """台灣時間（雲端主機是 UTC，不能直接用 datetime.now()）"""
+    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
 
 
 def save_json(path, obj):
@@ -235,7 +240,7 @@ def fetch_tpex_inst(d):
 
 def candidate_dates():
     """由今天往回列出平日(週一~週五)。收盤資料約 14:30 後才有，所以 14:40 前不抓今天"""
-    now = datetime.now()
+    now = tw_now()
     d = now.date()
     if now.hour * 60 + now.minute < 14 * 60 + 40:
         d -= timedelta(days=1)
@@ -257,7 +262,7 @@ def get_day(kind, fetcher, d):
     except Exception as e:
         print(f"  ! 下載 {kind} {d} 失敗: {e}")
         return None
-    today = date.today()
+    today = tw_now().date()
     if not res.get("holiday") or d < today - timedelta(days=1):
         save_cache(kind, d, res)
     return res
@@ -362,7 +367,7 @@ def update_data():
     TAIEX_RET20 = round((taiex[-1][1] / taiex[-21][1] - 1) * 100, 2) if len(taiex) > 21 else None
     log("計算技術指標與選股…")
     build_report(taiex, trading[-1][0])
-    STATUS.update(state="ready", progress=100, report_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    STATUS.update(state="ready", progress=100, report_time=tw_now().strftime("%Y-%m-%d %H:%M:%S"))
     log(f"完成！資料日期 {trading[-1][0]:%Y-%m-%d}，共 {len(hist)} 檔股票")
     cleanup_cache(trading[0][0])
 
@@ -792,7 +797,7 @@ def build_report(taiex, last_date):
     REPORT = {
         "date": last_date.strftime("%Y-%m-%d"),
         "dates": DATES[-60:],
-        "generated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "generated": tw_now().strftime("%Y-%m-%d %H:%M"),
         "market": market,
         "breadth": {"up": up, "down": down, "flat": len(latest) - up - down},
         "momentum": [with_sv(pack(a, trade_plan(a, "momentum"), s, w), a) for s, a, w in mom],
@@ -845,7 +850,7 @@ def roc_date(s):
 
 
 def load_profiles():
-    today = date.today()
+    today = tw_now().date()
     cached = load_cache("prof", today)
     if cached:
         return cached
@@ -1877,7 +1882,7 @@ def update_track(rep):
         r["bars"] = [bars[k] for k in sorted(bars)][:10]
     keep = sorted({r["d"] for r in recs})[-30:]          # 保留最近 30 個建議日
     TRACK["recs"] = [r for r in recs if r["d"] in keep]
-    TRACK["updated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    TRACK["updated"] = tw_now().strftime("%Y-%m-%d %H:%M")
     try:
         save_json(os.path.join(DATA_DIR, "track.json"), TRACK)
     except Exception as e:
@@ -3315,7 +3320,7 @@ def export_static(path):
     live = live_quotes(list(dict.fromkeys(codes)))
     report = {k: v for k, v in REPORT.items() if k != "names"}
     data = {"report": report, "stocks": stocks, "live": live,
-            "generated": datetime.now().strftime("%m/%d %H:%M")}
+            "generated": tw_now().strftime("%m/%d %H:%M")}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     h2 = json.dumps(HIST2, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     html = PAGE.replace("<script>\nlet R=null", "<script>window.__TW_STATIC__=" + js + ";</script>\n<script>window.__TW_HIST2__=" + h2
@@ -3406,7 +3411,7 @@ def apply_rss_news():
         hits = [h for h in heads if nm in h["title"]]
         if hits:
             stocks[code] = [{"title": h["title"], "source": h["source"], "date": h["date"], "sentiment": "新聞", "url": h["url"]} for h in hits[:3]]
-    NEWS = {"date": datetime.now().strftime("%Y-%m-%d"), "headlines": heads[:12], "stocks": stocks}
+    NEWS = {"date": tw_now().strftime("%Y-%m-%d"), "headlines": heads[:12], "stocks": stocks}
     print(f"已抓取 RSS 新聞 {len(heads)} 則，對應到 {len(stocks)} 檔股票")
 
 
@@ -3474,7 +3479,7 @@ def build_daily_lesson():
                       "quiz": {"q": "好公司股價回檔時，比較好的做法是？", "o": ["一次全部買進", "等止穩、分批買，先想好停損", "趕快賣掉", "借錢加碼"], "a": 1,
                                "e": "分批買進、設好停損，可以降低看錯的風險。"}})
     heads = (NEWS.get("headlines") or [])[:6] if NEWS else []
-    return {"date": d, "generated": datetime.now().strftime("%Y-%m-%d %H:%M"), "dates": DATES[-60:], "market": market, "cases": cases, "headlines": heads}
+    return {"date": d, "generated": tw_now().strftime("%Y-%m-%d %H:%M"), "dates": DATES[-60:], "market": market, "cases": cases, "headlines": heads}
 
 
 def site_page(html):
