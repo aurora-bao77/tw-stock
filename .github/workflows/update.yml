@@ -32,10 +32,11 @@ jobs:
           restore-keys: twdata-
       - name: 產生網站與今日時事課
         run: |
-          mkdir -p site/school
+          mkdir -p site/school site/english
           python tw_stock.py --rss --site --export site/index.html --lesson site/school/today.json
           cp icon-192.png icon-512.png manifest.webmanifest sw.js TwStock.apk site/
           cp school.html site/school/index.html
+          cp english.html site/english/index.html
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

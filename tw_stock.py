@@ -2384,6 +2384,7 @@ select{background:var(--card2);border:1px solid var(--line);color:var(--txt);pad
   <button class="g" id="alertbtn" onclick="showAlerts()">🔔 買賣提醒</button>
   <button class="g" onclick="showPic()">🐱 換圖片</button>
   <a class="g" id="schoollink" href="school/" hidden style="text-decoration:none">📚 股票小學堂</a>
+  <a class="g" id="englishlink" href="english/" hidden style="text-decoration:none">🔤 英文重新出發</a>
 </header>
 <div id="loading" class="loading"><h2>資料準備中…</h2><div class="bar"><i id="pb" style="width:0"></i></div>
 <div class="mut" id="lmsg"></div></div>
@@ -3263,7 +3264,7 @@ async function sendChat(){
     catch(e){box.innerHTML=`<span class="mut">${e&&e.code==='not_granted'?'（還沒允許 AI 功能，以上是橘橘的規則分析）':'（AI 暫時無法回答，以上是橘橘的規則分析）'}</span>`}}
 }
 
-drawCats();if(SITE||NATIVE)$('#schoollink').hidden=false;
+drawCats();if(SITE||NATIVE){$('#schoollink').hidden=false;$('#englishlink').hidden=false}
 setTimeout(()=>{const b=$('#catbub');if(b)b.hidden=true},9000);
 boot().then(loadWatch).then(()=>{if(R){render();initDB()}});
 </script>"""
