@@ -29,9 +29,9 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = 8765
-HISTORY_DAYS = 65          # 需要的交易日數 (MA60 需要 60 天)
-INST_DAYS = 10             # 法人資料天數
-MAX_LOOKBACK = 140         # 最多往回找幾個日曆天
+HISTORY_DAYS = 120         # 需要的交易日數 (MA60 需要 60 天，多存的用來回測建議準確度)
+INST_DAYS = 70             # 法人資料天數 (回測時要用到過去每天的法人買賣超)
+MAX_LOOKBACK = 200         # 最多往回找幾個日曆天
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "tw_stock_data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -252,6 +252,9 @@ def candidate_dates():
     return out
 
 
+MISSING = []    # 這次執行下載失敗的日期（歷史不完整時先不重算回測）
+
+
 def get_day(kind, fetcher, d):
     """從快取讀取，沒有就下載。休市日只在確定已過去時才快取"""
     c = load_cache(kind, d)
@@ -261,6 +264,8 @@ def get_day(kind, fetcher, d):
         res = fetcher(d)
     except Exception as e:
         print(f"  ! 下載 {kind} {d} 失敗: {e}")
+        if kind in ("twse3", "tpex3"):    # 行情缺一天會讓均線算錯；法人資料偶爾缺一天影響不大
+            MISSING.append((kind, d))
         return None
     today = tw_now().date()
     if not res.get("holiday") or d < today - timedelta(days=1):
@@ -271,6 +276,7 @@ def get_day(kind, fetcher, d):
 def update_data():
     global HIST, INST, FUND
     STATUS.update(state="loading", progress=0)
+    MISSING.clear()
     dates = candidate_dates()
     trading = []   # (date, twse, tpex_future)
     pool = ThreadPoolExecutor(max_workers=3)   # 櫃買資料較大，和證交所平行下載
@@ -718,6 +724,59 @@ def adjust_by_sv(a, s, w, momentum):
     return s, w
 
 
+def plan_v2(a):
+    """推薦 / 潛力股的進出場價。回測後停損放寬到 2.5 倍平均波動、目標 2 / 3.5 倍（原本停損太近）"""
+    p = trade_plan(a, "potential")
+    A = a["atr"]; mid = (p["entry_lo"] + p["entry_hi"]) / 2
+    stop, t1, t2 = mid - 2.5 * A, mid + 2 * A, mid + 3.5 * A
+    return {**p, "stop": rnd(stop, "down"), "t1": rnd(t1, "up"), "t2": rnd(t2, "up"), "rr": round((t1 - mid) / (mid - stop), 2),
+            "stop_pct": round((stop / mid - 1) * 100, 1), "t1_pct": round((t1 / mid - 1) * 100, 1)}
+
+
+def pick_momentum(latest, use_sv=True):
+    """今日推薦：多頭趨勢中回檔到月線附近、法人正在買的股票（買在回檔，不追高）。
+    回測 59 天：原本「追強勢股」平均每筆 -0.52%，改成這個 +0.98%"""
+    rows = []
+    for a in latest:
+        if not liquid(a) or not a["ma60"] or not a["ma20"]:
+            continue
+        c, m20, m60 = a["close"], a["ma20"], a["ma60"]
+        bias = (c / m20 - 1) * 100
+        inst5 = a["f5"] + a["t5"]
+        if not (m20 > m60 and c > m60 and -5 <= bias <= 0 and inst5 > 0):
+            continue
+        if use_sv and sv_of(a)["verdict"] == "疑似炒作":
+            continue
+        why = [f"多頭趨勢：月線 {m20:.2f} 在季線 {m60:.2f} 之上", f"回檔到月線附近（乖離 {bias:.1f}%），不是追高",
+               f"外資+投信 5 日買超 {inst5:,} 張"]
+        if a["trust_streak"] >= 2: why.append(f"投信連買 {a['trust_streak']} 天")
+        if a["rsi"] is not None: why.append(f"RSI {a['rsi']:.0f}" + ("，還沒過熱" if a["rsi"] < 60 else ""))
+        if use_sv:
+            why += [f"新聞題材：{t}" for t in themes_for(a["code"])]
+        ratio = inst5 / max(a["vma20"] or 1, 1)
+        rows.append((ratio, min(99, int(60 + min(ratio, 1) * 30 + (a["rsi"] is not None and a["rsi"] < 50) * 5 + (bool(a["ma20_prev5"]) and m20 > a["ma20_prev5"]) * 4)), a, why))
+    rows.sort(key=lambda x: -x[0])
+    return [(sc, a, w) for _, sc, a, w in rows[:12]]
+
+
+def pick_potential(latest, excl, use_sv=True):
+    """潛力股：打底完成、布林收斂、法人默默佈局（規則同前，進出場價改用 plan_v2）"""
+    rows = []
+    for a in latest:
+        if not liquid(a) or a["code"] in excl:
+            continue
+        s, w = score_potential(a)
+        if s + rr_adj(trade_plan(a, "potential")) < 55:
+            continue
+        if use_sv:
+            if sv_of(a)["verdict"] == "疑似炒作":
+                continue
+            w = w + [f"新聞題材：{t}" for t in themes_for(a["code"])]
+        rows.append((s, a, w))
+    rows.sort(key=lambda x: -x[0])
+    return rows[:12]
+
+
 _LAST_BUILD = {}
 
 
@@ -740,30 +799,8 @@ def build_report(taiex, last_date):
             all_a[code] = a
     latest = [a for a in all_a.values() if a["date"] == last_date.strftime("%Y-%m-%d")]
 
-    mom, pot = [], []
-    for a in latest:
-        if not liquid(a):
-            continue
-        s, w = score_momentum(a)
-        s += rr_adj(trade_plan(a, "momentum"))
-        if s >= 45:
-            s, w = adjust_by_sv(a, s, w, momentum=True)
-        if s >= 60:
-            mom.append((s, a, w))
-    mom.sort(key=lambda x: -x[0])
-    mom = mom[:12]
-    mom_codes = {a["code"] for _, a, _ in mom}
-    for a in latest:
-        if not liquid(a) or a["code"] in mom_codes:
-            continue
-        s, w = score_potential(a)
-        s += rr_adj(trade_plan(a, "potential"))
-        if s >= 40:
-            s, w = adjust_by_sv(a, s, w, momentum=False)
-        if s >= 55:
-            pot.append((s, a, w))
-    pot.sort(key=lambda x: -x[0])
-    pot = pot[:12]
+    mom = pick_momentum(latest)
+    pot = pick_potential(latest, {a["code"] for _, a, _ in mom})
 
     up = sum(1 for a in latest if a["chg"] > 0)
     down = sum(1 for a in latest if a["chg"] < 0)
@@ -791,6 +828,8 @@ def build_report(taiex, last_date):
         market = {"taiex": last[1], "taiex_chg_pct": last[2], "ma20": round(m20, 2), "ma60": round(m60, 2),
                   "mood": mood, "position": pos, "series": [[x[0], x[1]] for x in taiex]}
 
+    global MKT_MOOD
+    MKT_MOOD = market.get("mood") or ""
     simple = lambda a: {"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"],
                         "chg_pct": a["chg_pct"], "vol": a["vol"], "f5": a["f5"], "t5": a["t5"],
                         "value": round(a["vol"] * a["close"] / 1e5, 1)}
@@ -800,8 +839,8 @@ def build_report(taiex, last_date):
         "generated": tw_now().strftime("%Y-%m-%d %H:%M"),
         "market": market,
         "breadth": {"up": up, "down": down, "flat": len(latest) - up - down},
-        "momentum": [with_sv(pack(a, trade_plan(a, "momentum"), s, w), a) for s, a, w in mom],
-        "potential": [with_sv(pack(a, trade_plan(a, "potential"), s, w), a) for s, a, w in pot],
+        "momentum": [with_sv(pack(a, plan_v2(a), s, w), a) for s, a, w in mom],
+        "potential": [with_sv(pack(a, plan_v2(a), s, w), a) for s, a, w in pot],
         "news": {k: NEWS.get(k) for k in ("date", "market", "global", "themes", "headlines")} if NEWS else None,
         "gainers": [simple(a) for a in gainers],
         "losers": [simple(a) for a in losers],
@@ -1751,7 +1790,14 @@ def daytrade_info(a):
          "atr_pct": round(a["atr"] / c * 100, 2) if c else None,
          "pp": rnd(pp), "r1": rnd(2 * pp - l), "s1": rnd(2 * pp - h), "r2": rnd(pp + (h - l)), "s2": rnd(pp - (h - l))}
     ma5, ma20 = a.get("ma5"), a.get("ma20")
-    o["trend"] = "偏多" if ma5 and ma20 and c > ma5 > ma20 else "偏空" if ma5 and ma20 and c < ma5 < ma20 else "震盪"
+    tr = "偏多" if ma5 and ma20 and c > ma5 > ma20 else "偏空" if ma5 and ma20 and c < ma5 < ma20 else "震盪"
+    # 回測（2026/7～10 共 59 天）發現只看均線不準：要法人方向和大盤方向都一致，才算偏多 / 偏空
+    inst5 = (a.get("f5") or 0) + (a.get("t5") or 0)
+    if tr == "偏多" and (inst5 <= 0 or MKT_MOOD in ("空頭", "短線轉弱")):
+        tr = "震盪"
+    if tr == "偏空" and (inst5 >= 0 or MKT_MOOD in ("多頭", "偏多震盪")):
+        tr = "震盪"
+    o["trend"], o["inst5"] = tr, inst5
     o["plan"] = daytrade_plan(o, a.get("atr") or (h - l))
     return o
 
@@ -1760,20 +1806,22 @@ def daytrade_plan(o, atr):
     """當沖進出場計畫：何時、多少價位進場，停損、停利與最晚出場時間"""
     if not o["ok"] or not o["pp"]:
         return None
-    pad = max(atr * 0.3, tick(o["pp"]) * 2)
+    # 停損放寬到 1 倍平均波動（原本 0.3 倍太近，容易被洗出場）
+    pad = max(atr * 1.0, tick(o["pp"]) * 2)
     pp, r1, r2, s1, s2 = o["pp"], o["r1"], o["r2"], o["s1"], o["s2"]
-    if o["trend"] == "偏空" and not o["susp"]:
-        p = {"side": "空", "title": "先賣後買（做空）", "entry": rnd(pp, "down"), "stop": rnd(pp + pad, "up"), "t1": s1, "t2": s2,
-             "when": "9:15 以後，股價跌破 PP 而且跌破「開盤前 15 分鐘的最低價」時，先賣出",
-             "skip": "如果 9:15 後股價一直站在 PP 之上，今天不要做空"}
-    elif o["trend"] == "偏多":
-        p = {"side": "多", "title": "先買後賣（做多）", "entry": rnd(pp, "up"), "stop": rnd(pp - pad, "down"), "t1": r1, "t2": r2,
-             "when": "9:15 以後，股價站穩 PP 之上而且突破「開盤前 15 分鐘的最高價」時，買進",
-             "skip": "如果開盤就跌破 PP、或一開盤就大漲超過 R1，今天不要追"}
+    if o["trend"] == "偏空":
+        # 回測：做空和「突破追買」扣成本後都是賠的，偏空時不建議當沖
+        return None
+    if o["trend"] == "偏多":
+        p = {"side": "多", "mode": "dip", "title": "拉回買（做多）", "entry": rnd(pp, "down"), "stop": rnd(pp - pad, "down"), "t1": r1, "t2": r2,
+             "when": "9:15 以後，股價回檔到 PP 附近時掛單買進（不追高，沒回到 PP 就不買）",
+             "skip": "如果一開盤就跌破停損價，今天不要做；沒有回到 PP 就不要追高"}
     else:
-        p = {"side": "多", "title": "低接（區間來回）", "entry": rnd(s1, "up"), "stop": rnd(s1 - pad, "down"), "t1": pp, "t2": r1,
-             "when": "9:30 以後，股價回到 S1 附近、而且連續幾分鐘不再破底（止跌）時，買進",
+        p = {"side": "多", "mode": "dip", "title": "低接（區間來回）", "entry": rnd(s1, "down"), "stop": rnd(s1 - pad, "down"), "t1": pp, "t2": r1,
+             "when": "9:30 以後，股價回到 S1 附近時掛單買進",
              "skip": "如果股價跌破停損價就不要接；沒有回到 S1 就不要追高"}
+    if not p["entry"] or not p["stop"]:     # 波動太大，停損會跌到 0 以下
+        return None
     risk = abs(p["entry"] - p["stop"])
     p["rr"] = round(abs(p["t1"] - p["entry"]) / risk, 1) if risk else None
     p["exit"] = "到第一目標先賣一半，剩下的到第二目標或 13:20 前全部出清；碰到停損價馬上出場，不要凹單"
@@ -1795,6 +1843,8 @@ def daytrade_list(latest):
     rows.sort(key=lambda x: -x[0])
     out = []
     for _, a, d in rows[:20]:
+        if not d["plan"]:      # 偏空：今天不建議當沖
+            continue
         out.append({"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
                     "etf": is_nonstock(a["code"]), "k": [[s["o"][i], s["h"][i], s["l"][i], s["c"][i]] for s in (HIST[a["code"]],)
                                                          for i in range(max(len(s["c"]) - 20, 0), len(s["c"]))], **d})
@@ -1804,6 +1854,7 @@ def daytrade_list(latest):
 # ---------------------------------------------------------------- 建議準確度追蹤
 TRACK_URL = os.environ.get("TRACK_URL", "https://aurora-bao77.github.io/tw-stock/track.json")
 TRACK = {}
+MKT_MOOD = ""   # 大盤多空（當沖判斷用）
 
 
 def load_track():
@@ -1826,16 +1877,26 @@ def load_track():
 
 def track_rec(d, kind, x, bt=False):
     if kind == "daytrade":
-        p = {k: x["plan"][k] for k in ("side", "title", "entry", "stop", "t1", "t2")}
+        p = {k: x["plan"][k] for k in ("side", "title", "entry", "stop", "t1", "t2", "mode") if k in x["plan"]}
     else:
         p = {k: x["plan"][k] for k in ("entry_lo", "entry_hi", "stop", "t1", "t2")}
     return {"d": d, "k": kind, "code": x["code"], "name": x["name"], "close": x["close"], "p": p, "bars": [], **({"bt": 1} if bt else {})}
 
 
-def backfill_daytrade(days=20):
-    """第一次使用：用過去 20 個交易日的價格，回推當時會給的當沖建議（標示為回測）"""
-    global HIST, RISK
-    full, saved = HIST, RISK
+def mood_at(series, d):
+    """某一天收盤時的大盤多空（同 build_report 的判斷）"""
+    cl = [x[1] for x in series if x[0] <= d]
+    if not cl:
+        return ""
+    m20 = sum(cl[-20:]) / min(20, len(cl)); m60 = sum(cl[-60:]) / min(60, len(cl)); c = cl[-1]
+    return "多頭" if c > m20 > m60 else "偏多震盪" if c > m20 else "短線轉弱" if c > m60 else "空頭"
+
+
+def backfill(series, days=40):
+    """規則改版時：用過去 days 天、每天收盤當時的資料，重算當時會給的推薦 / 潛力 / 當沖建議（標示為回測）。
+    新聞、實力鑑定只有現在的資料，回測時不使用"""
+    global HIST, INST, RISK, MKT_MOOD
+    full, finst, saved, smood = HIST, INST, RISK, MKT_MOOD
     ref = max(full.values(), key=lambda s: len(s["dates"]))["dates"]
     out = []
     try:
@@ -1849,12 +1910,21 @@ def backfill_daytrade(days=20):
                 if i >= 30:
                     trunc[code] = {k: (v[:i] if isinstance(v, list) else v) for k, v in s.items()}
             HIST = trunc
-            latest = [a for a in (analyze(c) for c in trunc) if a]
+            INST = {c: [x for x in v if x[0] <= d] for c, v in finst.items()}
+            MKT_MOOD = mood_at(series, d)
+            latest = [a for a in (analyze(c) for c in trunc) if a and a["date"] == d]
+            mom = pick_momentum(latest, use_sv=False)
+            pot = pick_potential(latest, {a["code"] for _, a, _ in mom}, use_sv=False)
+            out += [track_rec(d, "momentum", {**a, "plan": plan_v2(a)}, True) for _, a, _ in mom]
+            out += [track_rec(d, "potential", {**a, "plan": plan_v2(a)}, True) for _, a, _ in pot]
             out += [track_rec(d, "daytrade", x, True) for x in daytrade_list(latest) if x.get("plan")]
     finally:
-        HIST, RISK = full, saved
-    print(f"已回測過去 {days} 天的當沖建議 {len(out)} 筆")
+        HIST, INST, RISK, MKT_MOOD = full, finst, saved, smood
+    print(f"已用新規則回測過去 {days} 天：{len(out)} 筆建議")
     return out
+
+
+TRACK_VER = 2   # 規則改版就加 1，舊紀錄會用新規則重算
 
 
 def update_track(rep):
@@ -1862,10 +1932,12 @@ def update_track(rep):
     global TRACK
     if not TRACK:
         TRACK = load_track()
-    recs = TRACK["recs"]
     d = rep["date"]
-    if not any(r["k"] == "daytrade" and r["d"] < d for r in recs):
-        recs += backfill_daytrade()
+    if TRACK.get("ver") != TRACK_VER and MISSING:
+        print(f"  ! 有 {len(MISSING)} 天資料沒下載到，等下次補齊再用新規則重算回測")
+    elif TRACK.get("ver") != TRACK_VER:
+        TRACK = {"ver": TRACK_VER, "since": d, "recs": backfill((rep.get("market") or {}).get("series") or [])}
+    recs = TRACK["recs"]
     have = {(r["d"], r["k"], r["code"]) for r in recs}
     for kind in ("momentum", "potential", "daytrade"):
         for x in rep.get(kind) or []:
@@ -1880,7 +1952,7 @@ def update_track(rep):
             if ds > r["d"]:
                 bars[ds] = [ds, s["o"][i], s["h"][i], s["l"][i], s["c"][i]]
         r["bars"] = [bars[k] for k in sorted(bars)][:10]
-    keep = sorted({r["d"] for r in recs})[-30:]          # 保留最近 30 個建議日
+    keep = sorted({r["d"] for r in recs})[-60:]          # 保留最近 60 個建議日
     TRACK["recs"] = [r for r in recs if r["d"] in keep]
     TRACK["updated"] = tw_now().strftime("%Y-%m-%d %H:%M")
     try:
@@ -2699,7 +2771,7 @@ function render(){
   if(TAB==='all'&&$('#alist')){$('#tabs').innerHTML=tabsHTML(tabs);fillAll();return}
   let h='';
   const bear=['空頭','短線轉弱'].includes(R.market.mood)?`<div class="status down" style="margin-bottom:12px">⚠️ 大盤目前為「${R.market.mood}」，個股推薦成功率會下降，${R.market.position}。</div>`:'';
-  if(TAB==='momentum'){h=bear+trBrief('momentum')+`<p class="sub">強勢多頭：均線多頭排列、量價齊揚、法人買超。適合短線順勢操作，嚴守停損。</p>
+  if(TAB==='momentum'){h=bear+trBrief('momentum')+`<p class="sub">多頭回檔買點：趨勢向上（月線在季線之上）、股價回到月線附近、外資和投信正在買。買在回檔、不追高，持有約 1～2 週，嚴守停損。</p>
     <div class="stocks">${R.momentum.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票（大盤偏弱時正常）</div>'}</div>`}
   else if(TAB==='potential'){h=bear+trBrief('potential')+`<p class="sub">蓄勢待發：剛站上月線、布林收斂、法人默默佈局，尚未大漲。適合分批佈局、中線持有。</p>
     <div class="stocks">${R.potential.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票</div>'}</div>`}
@@ -2762,6 +2834,7 @@ function tabsHTML(tabs){return tabs.map(t=>`<button class="tab ${TAB===t[0]?'on'
 let AQ='',AI='',AS='chg',AN=100,AV='',AGR='';
 let NK='';
 // ---------------- 建議準確度：每天的建議 vs 之後的實際價格
+const TRACK_NOTE='📌 10/28 依回測結果改了規則：推薦改選「多頭回檔＋法人買」、停損放寬，當沖取消做空和突破追買。下面的回測都是用新規則重算的。<br>';
 const TRK_NAME={momentum:'🔥 今日推薦',potential:'💎 潛力股',daytrade:'⚡ 當沖'};
 let TRK='daytrade',TRD='';
 function trLastDate(){const t=R.track||[];return t.length?t.reduce((m,r)=>r.d>m?r.d:m,''):''}
@@ -2770,7 +2843,7 @@ function trBars(r){const b=r.bars.slice(),L=LIVE[r.code];
   return b}
 // 當沖：只看建議日的下一個交易日；同一天碰到停損和目標時，日線分不出先後，保守算停損。已扣手續費＋當沖稅約 0.44%
 function evalDT(r){const b=trBars(r)[0],p=r.p;if(!b)return{st:'wait',txt:'等待開盤'};
-  const [,o,h,l,c,live]=b,sh=p.side==='空',dip=!sh&&p.title.includes('低接');let fill,trig;
+  const [,o,h,l,c,live]=b,sh=p.side==='空',dip=!sh&&(p.mode==='dip'||p.title.includes('低接'));let fill,trig;
   if(sh){trig=l<=p.entry;fill=Math.min(o,p.entry)}else if(dip){trig=l<=p.entry;fill=Math.min(o,p.entry)}else{trig=h>=p.entry;fill=Math.max(o,p.entry)}
   const bar={o,h,l,c,live};if(!trig)return{st:live?'open':'none',txt:live?'盤中尚未到進場價':'沒到進場價，沒有進場',bar};
   const hs=sh?h>=p.stop:l<=p.stop,h1=sh?l<=p.t1:h>=p.t1,h2=sh?l<=p.t2:h>=p.t2;let ex,txt,st;
@@ -2816,8 +2889,8 @@ function trackTab(){const T=(R.track||[]).filter(r=>r.k===TRK),ds=[...new Set(T.
   return `<p class="sub">把每天的建議記下來，等之後真的開盤，用實際的 開盤 / 最高 / 最低 / 收盤 價格檢查：有沒有到進場價？先碰到目標還是停損？賺賠多少（已扣手續費和稅）。勝率高、平均報酬是正的，代表這類建議比較有參考價值。</p>
     <div class="chips">${Object.keys(TRK_NAME).map(k=>`<button class="tab ${TRK===k?'on':''}" onclick="TRK='${k}';TRD='';render()">${TRK_NAME[k]}</button>`).join('')}</div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:8px 0">${box('建議數',all.n)}${box('有進場',all.en)}${box('勝率',all.wr!=null?f(all.wr,0)+'%':'-',all.wr>=50?'up':'down')}${box('平均每筆',all.avg!=null?sg(all.avg)+f(all.avg,2)+'%':'-',cls(all.avg))}</div>
-    <div class="mut" style="font-size:12px">近 ${ds.length} 個建議日｜賺 ${all.w}、賠 ${all.lo}、沒進場 ${all.no}、進行中 ${all.op}${bt?`｜其中前 ${[...new Set(T.filter(r=>r.bt).map(r=>r.d))].length} 天是「回測」：用當時的價格回推會給的建議；正式紀錄 ${real.n} 筆，勝率 ${real.wr!=null?f(real.wr,0)+'%':'累積中'}`:''}
-      ${TRK!=='daytrade'?'｜推薦、潛力股從開始記錄這天起累積，資料會越來越多':''}</div>
+    <div class="mut" style="font-size:12px">${TRACK_NOTE}近 ${ds.length} 個建議日｜賺 ${all.w}、賠 ${all.lo}、沒進場 ${all.no}、進行中 ${all.op}${bt?`｜其中前 ${[...new Set(T.filter(r=>r.bt).map(r=>r.d))].length} 天是「回測」：用當時的價格回推會給的建議；正式紀錄 ${real.n} 筆，勝率 ${real.wr!=null?f(real.wr,0)+'%':'累積中'}`:''}
+</div>
     <div class="filters" style="margin-top:8px"><select onchange="TRD=this.value;render()">${ds.map(d=>`<option value="${d}" ${d===TRD?'selected':''}>${d} 的建議${T.some(r=>r.d===d&&r.bt)?'（回測）':''}</option>`).join('')}</select></div>
     ${TRD?`<div class="card" style="padding:10px;font-size:13px;margin-bottom:8px"><b>${TRD.slice(5)} 收盤後給的建議 → ${TRK==='daytrade'?'下一個交易日':'之後幾天'}的實際結果：</b>
       ${dst.en?`進場 ${dst.en} 檔，賺 ${dst.w}、賠 ${dst.lo}，合計 <b class="${cls(dst.sum)}">${sg(dst.sum)}${f(dst.sum,2)}%</b>，平均 <b class="${cls(dst.avg)}">${sg(dst.avg)}${f(dst.avg,2)}%</b>`:'沒有進場的'}${dst.no?`，${dst.no} 檔沒到進場價`:''}${dst.op?`，${dst.op} 檔進行中`:''}</div>`:''}
@@ -2830,7 +2903,7 @@ function trackTab(){const T=(R.track||[]).filter(r=>r.k===TRK),ds=[...new Set(T.
         <div><b>${r.name}</b> <small class="mut">${r.code}・建議日收 ${f(r.close)}</small></div>
         <div style="text-align:right;white-space:nowrap"><span class="vtag ${t[1]}">${t[0]}</span>${e.ret!=null?` <b class="${cls(e.ret)}">${sg(e.ret)}${f(e.ret,2)}%</b>`:''}</div></div>
         <div style="font-size:12.5px;margin-top:4px">📋 建議　${sug}</div><div style="font-size:12.5px">📈 實際　${act}</div><div class="mut" style="font-size:12px">${e.txt}</div></div>`}).join('')||'<div class=mut>這天沒有建議</div>'}</div>
-    <div class="mut" style="font-size:12px;margin-top:8px">計算方式：當沖用下一個交易日的開高低收；偏多突破碰到進場價才算進場、低接 / 放空碰到進場價才算進場；同一天又碰停損又碰目標時，日線看不出先後，保守算停損。推薦 / 潛力股 5 天內回到進場區才算進場，碰停損或目標就結束，最多追蹤 10 天。報酬已扣手續費（0.1425% × 2）和證交稅（當沖 0.15%、一般 0.3%）。過去的準確度不代表未來一定一樣。</div>`}
+    <div class="mut" style="font-size:12px;margin-top:8px">計算方式：當沖用下一個交易日的開高低收；股價回到掛單的進場價才算進場；同一天又碰停損又碰目標時，日線看不出先後，保守算停損。推薦 / 潛力股 5 天內回到進場區才算進場，碰停損或目標就結束，最多追蹤 10 天。報酬已扣手續費（0.1425% × 2）和證交稅（當沖 0.15%、一般 0.3%）。過去的準確度不代表未來一定一樣。</div>`}
 // 當沖卡片的迷你 K 線：近 20 天＋今天盤中，畫上進場 / 停損 / 目標線
 function miniK(r,Lv){const K=(r.k||[]).slice();if(Lv)K.push([Lv.o||Lv.price,Lv.h||Lv.price,Lv.l||Lv.price,Lv.price]);if(K.length<2)return'';
   const p=r.plan||{},lv=[[p.entry,'進場','#3b82f6'],[p.stop,'停損','var(--down)'],[p.t1,'目標一','var(--up)'],[p.t2,'目標二','var(--up)']].filter(x=>x[0]);
@@ -3007,7 +3080,7 @@ function dtSection(d){
   const st=!t.listed?'<b class="down">不可現股當沖</b>':t.dispose?'<b class="down">處置中，當沖受限制</b>':t.susp?'<b>只能先買後賣</b>（暫停先賣後買）':'<b class="up">可以雙向現股當沖</b>';
   return `<div class="sec"><h3>當沖資訊</h3><div style="font-size:14px">${st}</div>${kv2([['昨日當沖比',t.ratio!=null?f(t.ratio,1)+'%':'-',t.ratio>=35?'c-warn':''],['平均波動',yi(t.atr_pct,'%')],['樞紐 PP',f(t.pp)],
     ['壓力 R1',f(t.r1),'up'],['壓力 R2',f(t.r2),'up'],['支撐 S1',f(t.s1),'down'],['支撐 S2',f(t.s2),'down']])}
-    ${t.plan?'<h3 style="margin-top:12px">今日當沖計畫</h3>'+dtPlan(Object.assign({code:d.code},t)):''}
+    ${t.plan?'<h3 style="margin-top:12px">今日當沖計畫</h3>'+dtPlan(Object.assign({code:d.code},t)):t.listed&&!t.dispose?'<div class="status down" style="margin-top:8px">📉 法人在賣、趨勢偏空：今天不建議當沖（回測顯示做空扣成本後是賠的）</div>':''}
     <div class="mut" style="font-size:12px;margin-top:6px">樞紐點用昨天的最高、最低、收盤計算：站上 PP 偏多、跌破 PP 偏空。當沖風險很高，新手請先在股票小學堂練習。</div></div>`
 }
 function dtLive(r,p){
@@ -3020,6 +3093,7 @@ function dtLive(r,p){
   if(long?x<=p.stop:x>=p.stop){t='❌ 已碰到停損價 '+f(p.stop)+'，有部位要出場；沒部位今天先不做';c='down'}
   else if(long?x>=p.t2:x<=p.t2){t='🎯 已到第二目標 '+f(p.t2)+'，全部出場';c='up'}
   else if(long?x>=p.t1:x<=p.t1){t='✅ 已到第一目標 '+f(p.t1)+'，先'+(long?'賣':'回補')+'一半，停損移到進場價';c='up'}
+  else if(p.mode==='dip'){if(x<=p.entry*1.003){t='✅ 已回到進場價 '+f(p.entry)+' 附近，可以掛單買進';c='up'}else t='⌛ 現價比進場價 '+f(p.entry)+' 高，等回檔，不要追'}
   else if(long?x>=p.entry:x<=p.entry){const hi=L.h,lo=L.l;t=(long?'👀 站在進場價之上，':'👀 在進場價之下，')+'看有沒有'+(long?'突破今天高點 '+f(hi):'跌破今天低點 '+f(lo))+'，有就可以進場'}
   else t='⌛ 還沒到進場價 '+f(p.entry)+'，耐心等';
   return `<div class="status ${c}">即時 ${f(x)}：${t}</div>`
