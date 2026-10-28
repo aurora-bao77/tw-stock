@@ -674,6 +674,8 @@ def pack(a, plan, sc, why):
             "trust_streak", "foreign_streak", "date", "prev"]
     o = {k: (round(a[k], 2) if isinstance(a[k], float) else a[k]) for k in keep}
     o.update(score=sc, why=why, plan=plan)
+    h = HIST[a["code"]]
+    o["k"] = [[h["o"][i], h["h"][i], h["l"][i], h["c"][i], h["v"][i]] for i in range(max(len(h["c"]) - 30, 0), len(h["c"]))]
     return o
 
 
@@ -1182,6 +1184,7 @@ def stock_detail(code):
     k = min(60, len(s["c"]))
     o["ohlc"] = [[s["o"][i], s["h"][i], s["l"][i], s["c"][i], s["v"][i]] for i in range(len(s["c"]) - k, len(s["c"]))]
     o.pop("spark", None)
+    o.pop("k", None)     # 個股頁已有 ohlc，不重複
     return o
 
 
@@ -1671,7 +1674,8 @@ def etf_list(latest):
             act, ac = "盤整，靠近進場區再買", ""
         out.append({"code": a["code"], "name": a["name"], "kind": kind, "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
                     "ret20": a.get("ret20"), "plan": p, "act": act, "ac": ac, "freq": d.get("freq"), "yield": d.get("yield"),
-                    "dv": d.get("verdict"), "dvc": d.get("vc"), "value": round(a["vol"] * a["close"] / 1e5, 1)})
+                    "dv": d.get("verdict"), "dvc": d.get("vc"), "value": round(a["vol"] * a["close"] / 1e5, 1), "vma20": a["vma20"],
+                    "k": [[h["o"][i], h["h"][i], h["l"][i], h["c"][i], h["v"][i]] for h in (HIST[a["code"]],) for i in range(max(len(h["c"]) - 30, 0), len(h["c"]))]})
     out.sort(key=lambda r: -r["value"])
     return out[:150]
 
@@ -1749,6 +1753,7 @@ def nolimit_list(all_a, last_date):
         n = len(s["dates"]) if first_day and s["dates"][0] > first_day else None
         kind, why = nolimit_reason(code, n)
         o = {"code": code, "name": s["name"], "market": s["market"], "kind": kind, "why": why, "close": s["c"][-1], "vol": s["v"][-1],
+             "k": [[s["o"][i], s["h"][i], s["l"][i], s["c"][i], s["v"][i]] for i in range(max(len(s["c"]) - 30, 0), len(s["c"]))],
              "up": v["up"], "in_detail": code in all_a and len(s["c"]) >= 30}
         a = all_a.get(code)
         if kind == "新股" or not a:
@@ -1760,7 +1765,7 @@ def nolimit_list(all_a, last_date):
             if (a["vma20"] or 0) < 50 and kind != "其他":
                 continue
             p = generic_plan(a)
-            o.update(chg_pct=a["chg_pct"], plan=p, ret20=a.get("ret20"))
+            o.update(chg_pct=a["chg_pct"], plan=p, ret20=a.get("ret20"), vma20=a["vma20"])
             if p["trend"] == "多頭" and (a["rsi"] or 50) < 75:
                 o["act"], o["ac"] = "可分批買進", "up"
             elif p["trend"] == "多頭":
@@ -1836,7 +1841,7 @@ def daytrade_list(latest):
         if (a["vma20"] or 0) < 3000 or a["close"] < 10 or a["vol"] < 2000:
             continue
         d = daytrade_info(a)
-        if not d["ok"] or (d["atr_pct"] or 0) < 2.5:
+        if not d["ok"] or (d["atr_pct"] or 0) < 2.5 or (d["atr_pct"] or 0) > 12:   # 波動異常大（多半是資料異常或剛上市）不列入
             continue
         score = (d["atr_pct"] or 0) * 10 + min(a["vol"] / a["vma20"], 4) * 8 + (d["ratio"] or 0) * 0.3
         rows.append((score, a, d))
@@ -1846,7 +1851,7 @@ def daytrade_list(latest):
         if not d["plan"]:      # 偏空：今天不建議當沖
             continue
         out.append({"code": a["code"], "name": a["name"], "market": a["market"], "close": a["close"], "chg_pct": a["chg_pct"], "vol": a["vol"],
-                    "etf": is_nonstock(a["code"]), "k": [[s["o"][i], s["h"][i], s["l"][i], s["c"][i]] for s in (HIST[a["code"]],)
+                    "etf": is_nonstock(a["code"]), "vma20": a["vma20"], "k": [[s["o"][i], s["h"][i], s["l"][i], s["c"][i]] for s in (HIST[a["code"]],)
                                                          for i in range(max(len(s["c"]) - 20, 0), len(s["c"]))], **d})
     return out
 
@@ -2462,6 +2467,7 @@ select{background:var(--card2);border:1px solid var(--line);color:var(--txt);pad
 <div class="mut" id="lmsg"></div></div>
 <main id="app" style="display:none">
   <div class="grid g4" id="overview"></div>
+  <div id="nowslot"></div>
   <div id="newsslot"></div>
   <div class="tabs" id="tabs"></div>
   <div id="panel"></div>
@@ -2493,11 +2499,12 @@ function nativeLive(codes){
 async function webLive(codes){const out={},one=codes.length===1;
   const sym=c=>c==='t00'?'TWS:TSE01:INDEX':c==='o00'?'TWS:OTC01:INDEX':'TWS:'+c+':STOCK';
   for(let i=0;i<codes.length;i+=80){
-    try{const js=await (await fetch('https://ws.api.cnyes.com/ws/api/v1/quote/quotes/'+codes.slice(i,i+80).map(sym).join(',')+'?column='+(one?'K,E,KEY,M,AI':'D'),{cache:'no-store'})).json();
+    try{const js=await (await fetch('https://ws.api.cnyes.com/ws/api/v1/quote/quotes/'+codes.slice(i,i+80).map(sym).join(',')+'?column='+(one?'K,E,KEY,M,AI':'K,D'),{cache:'no-store'})).json();
       (js.data||[]).forEach(x=>{const id=x['200010'],k=id==='TSE01'?'t00':id==='OTC01'?'o00':id,t=new Date(((x['200007']||0)+8*3600)*1000),z=n=>String(n).padStart(2,'0');
         if(x['6']==null)return;
         const o={price:x['6'],y:x['21'],o:x['19'],h:x['12'],l:x['13'],v:x['800001'],chg_pct:x['56'],name:x['200009'],src:'cnyes',
           d:t.getUTCFullYear()+z(t.getUTCMonth()+1)+z(t.getUTCDate()),time:z(t.getUTCHours())+':'+z(t.getUTCMinutes())+':'+z(t.getUTCSeconds())};
+        if(x['200055']!=null){o.inV=x['200054'];o.outV=x['200055'];o.outP=x['200057']}   // 內盤 / 外盤（張）、外盤比例
         if(x['436']!=null){o.bids=[0,1,2,3,4].map(j=>[x[436+j],x[200014+j]]).filter(b=>b[0]);o.asks=[0,1,2,3,4].map(j=>[x[441+j],x[200019+j]]).filter(b=>b[0])}
         out[k]=o})}catch(e){}}
   return out}
@@ -2509,7 +2516,7 @@ async function fetchIntraday(code){const c=IDAY[code];if(c&&Date.now()-c.at<6000
     const t0=new Date((pts[0][0]+8*3600)*1000),z=n=>String(n).padStart(2,'0'),d=t0.getUTCFullYear()+z(t0.getUTCMonth()+1)+z(t0.getUTCDate());
     const ss=(x.session||[])[0]||[pts[0][0],pts[pts.length-1][0]];
     return IDAY[code]={at:Date.now(),d,pts,s0:ss[0],s1:ss[1],y:(x.quote||{})['21']}}catch(e){return null}}
-async function loadDtIntraday(){if(!S||NATIVE||TAB!=='daytrade')return;let got=false;
+async function loadDtIntraday(){if(TAB!=='daytrade')return;let got=false;
   await Promise.all((R.daytrade||[]).map(async r=>{const c=IDAY[r.code];if(c&&Date.now()-c.at<60000)return;if(await fetchIntraday(r.code))got=true}));
   const ae=document.activeElement;if(got&&TAB==='daytrade'&&!(ae&&/INPUT|SELECT|TEXTAREA/.test(ae.tagName)))render()}
 // 盤中走勢小圖：今天每分鐘價格＋昨收（灰線）＋進場 / 停損 / 目標線
@@ -2716,18 +2723,19 @@ function stockCard(s){
   const w=getWatch().includes(s.code);
   return `<div class="st"><div class="top"><div><span class="nm">${s.name}</span><span class="cd">${s.code}・${s.market}</span>
     <span class="score">${s.score}分</span>${s.grade||s.card?`<span class="gr g${s.grade||s.card.grade}" style="margin-left:6px" title="分析師總評">${s.grade||s.card.grade}</span>`:''}
-    <div style="margin-top:4px">${spark(s.spark||(s.ohlc||[]).slice(-40).map(x=>x[3]))}</div></div>
+</div>
     <div class="price"><div class="p ${cls(c)}">${f(p)}</div><div class="${cls(c)}">${sg(c)}${f(c)}%</div>
     <div class="mut" style="font-size:11px">${L&&L.v?'量 '+f(L.v,0)+' 張':'量 '+f(s.vol,0)+' 張'}</div></div></div>
     <div class="plan"><div><small>建議進場</small><b class="up">${f(pl.entry_lo)}~${f(pl.entry_hi)}</b></div>
       <div><small>停損 (${pl.stop_pct}%)</small><b class="down">${f(pl.stop)}</b></div>
       <div><small>目標一 (+${pl.t1_pct}%)</small><b>${f(pl.t1)}</b></div>
       <div><small>目標二</small><b>${f(pl.t2)}</b></div></div>
+    ${posBlock(s.code,s.k||s.ohlc,pl,s.close,s.vma20)}
     <div class="mut" style="font-size:12px">風報比 ${pl.rr??'-'}｜RSI ${f(s.rsi,0)}｜月線 ${f(s.ma20)}｜外資5日 <span class="${cls(s.f5)}">${f(s.f5,0)}</span>｜投信5日 <span class="${cls(s.t5)}">${f(s.t5,0)}</span>
       ${s.pe?'｜PE '+f(s.pe,1):''}</div>
     ${pl.note?`<div class="status">${pl.note}</div>`:''}
     ${svRow(s)}
-    <div class="why">${s.why.map(x=>'<span>'+x+'</span>').join('')}</div>${liveStatus(s)}
+    <div class="why">${s.why.map(x=>'<span>'+x+'</span>').join('')}</div>
     <div style="margin-top:8px;text-align:right"><button class="g" onclick="toggleWatch('${s.code}')">${w?'★ 移出自選':'☆ 加入自選'}</button></div></div>`
 }
 
@@ -2767,15 +2775,17 @@ function render(){
   const tabs=[['momentum','🔥 今日推薦股'],['potential','💎 潛力股'],['daytrade','⚡ 當沖參考'],['etf','🏦 ETF 買賣'],['divs','💰 配息股'],['nolimit','🚀 無漲跌幅'],['track','🎯 準確度'],['all','📋 全部股票'],['watch','★ 自選股'],['rank','📊 排行榜']];
   $('#tabs').innerHTML=tabsHTML(tabs);
   if($('#newsslot'))$('#newsslot').innerHTML=newsPanel();
+  if($('#nowslot'))$('#nowslot').innerHTML=nowPanel();
+  if(CHART==='今日走勢'&&['momentum','potential','watch','nolimit','etf'].includes(TAB))setTimeout(()=>loadIntraFor(tabCodes()));
   if(TAB==='daytrade')setTimeout(loadDtIntraday);if(TAB==='etf')setTimeout(fillEtf);if(TAB==='divs')setTimeout(fillDiv);
   if(TAB==='all'&&$('#alist')){$('#tabs').innerHTML=tabsHTML(tabs);fillAll();return}
   let h='';
   const bear=['空頭','短線轉弱'].includes(R.market.mood)?`<div class="status down" style="margin-bottom:12px">⚠️ 大盤目前為「${R.market.mood}」，個股推薦成功率會下降，${R.market.position}。</div>`:'';
-  if(TAB==='momentum'){h=bear+trBrief('momentum')+`<p class="sub">多頭回檔買點：趨勢向上（月線在季線之上）、股價回到月線附近、外資和投信正在買。買在回檔、不追高，持有約 1～2 週，嚴守停損。</p>
+  if(TAB==='momentum'){h=bear+trBrief('momentum')+chartToggle()+`<p class="sub">多頭回檔買點：趨勢向上（月線在季線之上）、股價回到月線附近、外資和投信正在買。買在回檔、不追高，持有約 1～2 週，嚴守停損。</p>
     <div class="stocks">${R.momentum.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票（大盤偏弱時正常）</div>'}</div>`}
-  else if(TAB==='potential'){h=bear+trBrief('potential')+`<p class="sub">蓄勢待發：剛站上月線、布林收斂、法人默默佈局，尚未大漲。適合分批佈局、中線持有。</p>
+  else if(TAB==='potential'){h=bear+trBrief('potential')+chartToggle()+`<p class="sub">蓄勢待發：剛站上月線、布林收斂、法人默默佈局，尚未大漲。適合分批佈局、中線持有。</p>
     <div class="stocks">${R.potential.map(stockCard).join('')||'<div class=mut>今日無符合條件的股票</div>'}</div>`}
-  else if(TAB==='watch'){const w=getWatch();h=`<p class="sub">在上方查詢任一股票並加入自選，會每天自動給出進出場建議。</p>
+  else if(TAB==='watch'){const w=getWatch();h=`<p class="sub">在上方查詢任一股票並加入自選，會每天自動給出進出場建議。</p>${chartToggle()}
     <div class="card" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">💰 我可以投入的資金
       <input id="budget" type="number" inputmode="numeric" value="${getBudget()}" style="width:130px" onchange="setBudget(this.value)"> 元
       <span class="mut" style="font-size:12px">（用來算每檔建議買多少）</span></div>
@@ -2791,6 +2801,7 @@ function render(){
       <div style="text-align:right"><div class="${cls(c)}" style="font-size:22px;font-weight:800">${f(p)}</div><div class="${cls(c)}" style="font-size:13px">${sg(c)}${f(c)}%</div>
       <div class="mut" style="font-size:11px">${nd?'即時 '+(Lv.time||''):R.date.slice(5)+' 收盤'}</div></div></div>
       ${IDAY[r.code]&&IDAY[r.code].d>R.date.replace(/-/g,'')?miniIntra(r,IDAY[r.code]):miniK(r,nd?Lv:null)}
+      <div style="font-size:12.5px">📍 ${posText(p,lvOf(r.plan))}</div>${(buyPower(r.code,r.vma20)||{html:'<div class="mut" style="font-size:12px">📊 買氣：開盤後顯示</div>'}).html}
       <div class="mut" style="font-size:12px">波動 ${f(r.atr_pct,1)}%・昨日當沖比 ${r.ratio!=null?f(r.ratio,1)+'%':'-'}${nd&&Lv.v?'・今日量 '+f(Lv.v,0)+' 張':''}</div>
       ${dtPlan(r)}</div>`}).join('')||'<div class=mut>今天沒有符合條件的股票</div>'}</div>
     <div class="mut" style="font-size:12px;margin-top:8px">波動＝平均每天的振幅（ATR ÷ 股價）；當沖比＝昨天當沖成交量占總成交量的比例，越高代表短線客越多。風報比＝可能賺的價差 ÷ 停損會虧的價差，大於 1.5 比較值得做。以上是依昨天資料算出的參考計畫，不是保證獲利。</div>`}
@@ -2798,7 +2809,7 @@ function render(){
     <div class="filters"><input placeholder="搜尋 ETF 代號或名稱" value="${EQ}" oninput="EQ=this.value.trim();fillEtf()">
     <select onchange="EK=this.value;fillEtf()">${['','股票型','債券','槓桿/反向'].map(v=>`<option value="${v}" ${v===EK?'selected':''}>${v||'全部種類'}</option>`).join('')}</select>
     <select onchange="EF=this.value;fillEtf()">${['','月配','雙月配','季配','半年配','年配'].map(v=>`<option value="${v}" ${v===EF?'selected':''}>${v||'全部配息頻率'}</option>`).join('')}</select></div>
-    <div class="stocks" id="elist"></div>`}
+    ${chartToggle()}<div class="stocks" id="elist"></div>`}
   else if(TAB==='divs'){const D=R.divs||[],cnt=k=>D.filter(r=>r[3]===k).length;
     h=`<p class="sub">依「多久配一次息」分類，可以挑每個月都有錢進來的組合（例如 3 檔不同月份的季配息）。「判斷」綜合了殖利率、有沒有填息、配息有沒有縮水、股價趨勢和公司體質。</p>
     <div class="chips">${['月配','雙月配','季配','半年配','年配',''].map(k=>`<button class="tab ${DF===k?'on':''}" onclick="DF='${k}';render()">${k||'全部'}（${k?cnt(k):D.length}）</button>`).join('')}</div>
@@ -2812,7 +2823,7 @@ function render(){
     h=`<div class="status down" style="margin-bottom:10px;color:var(--bad)">⚠️ 沒有漲跌幅限制的股票，一天可能漲或跌超過 10%（甚至 30%、50%），風險比一般股票大很多，一定要設停損、只用小錢。</div>
     <p class="sub">一般台股一天最多漲跌 10%，但下面這些沒有限制：剛上市櫃前 5 天的新股、追蹤國外市場的 ETF / ETN、債券 ETF，以及暫停後恢復交易的股票。</p>
     <div class="chips">${['','新股','其他','海外ETF','海外ETN','債券ETF'].map(k=>`<button class="tab ${NK===k?'on':''}" onclick="NK='${k}';render()">${k||'全部'}（${k?cnt(k):L.length}）</button>`).join('')}</div>
-    <div class="stocks">${L.filter(r=>!NK||r.kind===NK).slice(0,150).map(nlCard).join('')||'<div class=mut>今天沒有這一類的股票</div>'}</div>`}
+    ${chartToggle()}<div class="stocks">${L.filter(r=>!NK||r.kind===NK).slice(0,150).map(nlCard).join('')||'<div class=mut>今天沒有這一類的股票</div>'}</div>`}
   else if(TAB==='track'){h=trackTab()}
   else if(TAB==='all'){const inds=[...new Set(R.all.map(r=>r[3]).filter(Boolean))].sort();
     h=`<p class="sub">今日所有上市櫃股票（${R.all.length} 檔），點任一檔可看公司資料、EPS、股利與分析師評等。</p>
@@ -2913,6 +2924,71 @@ function miniK(r,Lv){const K=(r.k||[]).slice();if(Lv)K.push([Lv.o||Lv.price,Lv.h
   g+=lv.map(x=>`<line x1="0" x2="${W-R0}" y1="${y(x[0])}" y2="${y(x[0])}" stroke="${x[2]}" stroke-dasharray="4 3" stroke-width="1"/><text x="${W-R0+3}" y="${+y(x[0])+4}" font-size="9.5" fill="${x[2]}">${x[1]} ${f(x[0])}</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin:6px 0;display:block">${g}</svg><div class="mut" style="font-size:11px;margin-top:-4px">近 20 天 K 線${Lv?'＋今天（橘框）':''}，虛線是今天的進場 / 停損 / 目標價</div>`}
 
+// ---------------- 線形圖：近 30 天 K 線（或今天每分鐘走勢）＋進場區 / 停損 / 目標 / 現價
+let CHART='日K';
+function chartToggle(){return `<div class="chips" style="padding:0 0 8px">線圖：${['日K','今日走勢'].map(k=>`<button class="tab ${CHART===k?'on':''}" onclick="CHART='${k}';render()">${k}</button>`).join('')}<span class="mut" style="font-size:12px;align-self:center">藍色區＝進場區，綠虛線＝停損，紅虛線＝目標，橘線＝現價</span></div>`}
+function lvOf(pl){if(!pl)return{};return pl.entry_lo!=null?{lo:pl.entry_lo,hi:pl.entry_hi,stop:pl.stop,t1:pl.t1,t2:pl.t2}:{lo:pl.entry,hi:pl.entry,stop:pl.stop,t1:pl.t1,t2:pl.t2}}
+function curPx(code,close){const L=LIVE[code];return L&&L.price&&L.d&&R&&L.d>=R.date.replace(/-/g,'')?L.price:close}
+function levelChart(code,K0,lv,close){
+  const L=LIVE[code],today=L&&L.d&&L.price&&L.d>R.date.replace(/-/g,''),px=curPx(code,close),I=IDAY[code],intra=CHART==='今日走勢'&&I&&I.d>=R.date.replace(/-/g,'');
+  const W=330,H=130,R0=74,VH=intra?0:18,top=4,bot=H-VH-4;
+  const lines=[[lv.t2,'目標二','var(--up)'],[lv.t1,'目標一','var(--up)'],[lv.stop,'停損','var(--down)']].filter(x=>x[0]);
+  let vals=[px,...lines.map(x=>x[0]),lv.lo,lv.hi].filter(v=>v!=null),g='',K=[];
+  if(intra)vals.push(...I.pts.map(x=>x[1]),I.y||close);
+  else{K=(K0||[]).slice(-30).map(k=>k.slice());if(today)K.push([L.o||L.price,L.h||L.price,L.l||L.price,L.price,L.v||0,1]);vals.push(...K.flatMap(k=>[k[1],k[2]]))}
+  if(!vals.length)return'';
+  const mx=Math.max(...vals),mn=Math.min(...vals),rg=mx-mn||1,Y=v=>(top+(mx-v)/rg*(bot-top)).toFixed(1),CW=W-R0;
+  if(lv.lo!=null)g+=`<rect x="0" y="${Y(lv.hi)}" width="${CW}" height="${Math.max(Y(lv.lo)-Y(lv.hi),2)}" fill="#3b82f6" opacity=".16"/>`;
+  if(intra){const X=t=>((t-I.s0)/((I.s1-I.s0)||1)*CW).toFixed(1),y0=I.y||close,last=I.pts[I.pts.length-1][1];
+    g+=`<line x1="0" x2="${CW}" y1="${Y(y0)}" y2="${Y(y0)}" stroke="var(--mut)" stroke-dasharray="2 3"/><polyline fill="none" stroke="${last>=y0?'var(--up)':'var(--down)'}" stroke-width="1.8" points="${I.pts.map(x=>X(x[0])+','+Y(x[1])).join(' ')}"/>`}
+  else{const cw=CW/Math.max(K.length,1),vm=Math.max(...K.map(k=>k[4]||0),1);
+    g+=K.map((k,i)=>{const x=(i+0.5)*cw,up=k[3]>=k[0],col=up?'var(--up)':'var(--down)',t=Math.min(+Y(k[0]),+Y(k[3])),hh=Math.max(Math.abs(Y(k[0])-Y(k[3])),1),vh=(k[4]||0)/vm*VH;
+      return `<line x1="${x}" x2="${x}" y1="${Y(k[1])}" y2="${Y(k[2])}" stroke="${col}"/><rect x="${x-cw*0.32}" y="${t}" width="${cw*0.64}" height="${hh}" fill="${col}" ${k[5]?'stroke="#f59e0b" stroke-width="1.5"':''}/><rect x="${x-cw*0.32}" y="${H-vh}" width="${cw*0.64}" height="${vh}" fill="${col}" opacity=".45"/>`}).join('')}
+  g+=lines.map(x=>`<line x1="0" x2="${CW}" y1="${Y(x[0])}" y2="${Y(x[0])}" stroke="${x[2]}" stroke-dasharray="4 3"/><text x="${CW+3}" y="${+Y(x[0])+4}" font-size="9.5" fill="${x[2]}">${x[1]} ${f(x[0])}</text>`).join('');
+  if(lv.lo!=null){let zy=(+Y(lv.lo)+ +Y(lv.hi))/2+4;const py=+Y(px)+4;if(Math.abs(zy-py)<13)zy=py+(zy>=py?13:-13);   // 和現價標籤錯開
+    g+=`<text x="${CW+3}" y="${zy}" font-size="9.5" fill="#3b82f6">進場 ${f(lv.lo)}${lv.hi!==lv.lo?'~':''}</text>`}
+  g+=`<line x1="0" x2="${CW}" y1="${Y(px)}" y2="${Y(px)}" stroke="#f59e0b" stroke-width="1.4"/><rect x="${CW+1}" y="${+Y(px)-7}" width="${R0-2}" height="14" rx="3" fill="#f59e0b"/><text x="${CW+4}" y="${+Y(px)+4}" font-size="10" font-weight="700" fill="#fff">現價 ${f(px)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;margin:6px 0 2px;display:block">${g}</svg><div class="mut" style="font-size:11px">${intra?'今天每分鐘走勢（灰虛線＝昨收）':'近 30 天 K 線＋成交量'+(today?'，橘框＝今天':'')}</div>`}
+function posText(px,lv){if(lv.lo==null)return'';const pc=(a,b)=>f(Math.abs(a/b-1)*100,1)+'%';
+  if(lv.stop&&px<=lv.stop)return`<b class="down">⛔ 已跌破停損 ${f(lv.stop)}</b>`;
+  if(lv.t2&&px>=lv.t2)return`<b class="up">🎯 已過目標二 ${f(lv.t2)}</b>`;
+  if(lv.t1&&px>=lv.t1)return`<b class="up">🎯 已過目標一 ${f(lv.t1)}</b>`;
+  if(px>=lv.lo*0.995&&px<=lv.hi*1.005)return`<b class="up">✅ 現價在進場區內</b>，離停損還有 ${pc(px,lv.stop)}`;
+  if(px>lv.hi)return`⏳ 比進場區高 ${pc(px,lv.hi)}，等拉回`;
+  return`👀 低於進場區 ${pc(px,lv.lo)}，離停損還有 ${pc(px,lv.stop)}`}
+// 買氣：外盤比例（主動買進）、五檔委買 / 委賣、成交量是平常的幾倍
+function buyPower(code,vma20){const L=LIVE[code];if(!L||!L.price||!(L.d>=R.date.replace(/-/g,'')))return null;
+  let sc=0;const it=[];
+  if(L.outP!=null){it.push(`外盤 ${f(L.outP,0)}%`);sc+=L.outP>=55?1:L.outP<=45?-1:0}
+  if(L.bids&&L.asks&&L.bids.length){const b=L.bids.reduce((a,x)=>a+(x[1]||0),0),a=L.asks.reduce((a,x)=>a+(x[1]||0),0);if(a&&b){const r=b/a;it.push(`委買是委賣的 ${f(r,1)} 倍`);sc+=r>=1.3?1:r<=0.77?-1:0}}
+  if(vma20&&L.v!=null){const n=new Date(),m=n.getHours()*60+n.getMinutes(),on=inSession()&&L.d===todayYMD(),el=on?Math.min(Math.max((m-540)/270,0.05),1):1,vr=L.v/(vma20*el);
+    it.push(`量是平常的 ${f(vr,1)} 倍`);if(vr>=1.3)sc+=(L.chg_pct||0)>=0?1:-1}
+  if(!it.length)return null;
+  const [t,c]=sc>=2?['買氣旺 🔥','up']:sc===1?['買氣偏多','up']:sc===0?['買賣平衡','']:sc===-1?['買氣偏弱','down']:['賣壓重 🧊','down'];
+  return{sc,html:`<div style="font-size:12.5px;margin-top:4px">📊 <b class="${c}">${t}</b>　<span class="mut">${it.join('・')}</span></div>`}}
+function todayYMD(){const n=new Date(),z=x=>String(x).padStart(2,'0');return n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())}
+function posBlock(code,K,pl,close,vma20){const lv=lvOf(pl),px=curPx(code,close),bp=buyPower(code,vma20);
+  return levelChart(code,K,lv,close)+`<div style="font-size:12.5px;margin-top:2px">📍 ${posText(px,lv)}</div>`+(bp?bp.html:'<div class="mut" style="font-size:12px;margin-top:4px">📊 買氣：開盤後顯示</div>')}
+async function loadIntraFor(codes){let got=false;
+  await Promise.all(codes.slice(0,40).map(async c=>{const x=IDAY[c];if(x&&Date.now()-x.at<60000)return;if(await fetchIntraday(c))got=true}));
+  const ae=document.activeElement;if(got&&!(ae&&/INPUT|SELECT|TEXTAREA/.test(ae.tagName)))render()}
+function tabCodes(){return TAB==='momentum'?R.momentum.map(x=>x.code):TAB==='potential'?R.potential.map(x=>x.code):TAB==='watch'?getWatch():TAB==='nolimit'?(R.nolimit||[]).filter(r=>!NK||r.kind===NK).slice(0,40).map(r=>r.code):TAB==='etf'?(R.etfs||[]).slice(0,40).map(r=>r.code):[]}
+// ---------------- 現在可以進場的股票
+function nowPanel(){if(!R)return'';const on=inSession(),n=new Date(),m=n.getHours()*60+n.getMinutes(),rows=[];
+  const add=(s,tag,pl,lv,ok)=>{const px=curPx(s.code,s.close);if(!ok(px))return;const bp=buyPower(s.code,s.vma20);rows.push({s,tag,pl,lv,px,bp})};
+  const sw=(s,tag)=>{const pl=s.plan;if(!pl||pl.entry_lo==null)return;add(s,tag,pl,lvOf(pl),px=>px>=pl.entry_lo*0.995&&px<=pl.entry_hi*1.005&&px>pl.stop)};
+  R.momentum.forEach(s=>sw(s,'🔥 推薦'));R.potential.forEach(s=>sw(s,'💎 潛力'));getWatch().forEach(c=>{const d=WATCH_DATA[c];if(d&&!R.momentum.some(x=>x.code===c)&&!R.potential.some(x=>x.code===c))sw(d,'★ 自選')});
+  if(on&&m>=555&&m<780)(R.daytrade||[]).forEach(r=>{const pl=r.plan;if(pl)add({...r,vma20:null},'⚡ 當沖',pl,lvOf(pl),px=>px<=pl.entry*1.005&&px>pl.stop)});
+  rows.sort((a,b)=>((b.bp?b.bp.sc:0)-(a.bp?a.bp.sc:0)));
+  const mood=(R.market||{}).mood,bear=['空頭','短線轉弱'].includes(mood);
+  return `<div class="card" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:16px">🟢 ${on?'現在可以進場的股票':'收盤價在進場區的股票'}</b><span class="mut" style="font-size:12px">${on?'即時價格進到建議進場區、還沒跌破停損':'下個交易日開盤後再確認一次'}</span></div>
+    ${bear?`<div class="status down" style="margin:6px 0">⚠️ 大盤「${mood}」，就算在進場區也建議少量、分批</div>`:''}
+    ${rows.length?`<div style="display:grid;gap:6px;margin-top:6px">${rows.slice(0,12).map(x=>{const q=x.tag==='⚡ 當沖'?null:suggestQty(x.s,x.px);
+      return `<div class="click" style="border:1px solid var(--line);border-radius:10px;padding:8px" onclick="lookup('${x.s.code}')"><div style="display:flex;justify-content:space-between;gap:6px"><div><span class="mut" style="font-size:12px">${x.tag}</span> <b>${x.s.name}</b> <small class="mut">${x.s.code}</small></div><b class="${cls((LIVE[x.s.code]||{}).chg_pct)}">${f(x.px)}</b></div>
+        <div style="font-size:12.5px">進場 ${f(x.lv.lo)}${x.lv.hi!==x.lv.lo?'~'+f(x.lv.hi):''}｜停損 <b class="down">${f(x.lv.stop)}</b>｜目標 <b class="up">${f(x.lv.t1)}</b> / ${f(x.lv.t2)}${q&&q.q?`｜建議 ${qtyTxt(q.q)}（約 ${f(q.q*x.px,0)} 元）`:''}</div>${x.bp?x.bp.html:''}</div>`}).join('')}</div>`
+      :`<div class="mut" style="margin-top:6px">${on?'目前沒有股票在進場區，耐心等，不要追高。':'目前沒有股票的收盤價在進場區。'}</div>`}
+    <div class="mut" style="font-size:11px;margin-top:6px">來源：今日推薦、潛力股、自選股${on?'、當沖（9:15～13:00）':''}。依買氣排序；建議張數依自選股分頁設定的資金計算。</div></div>`}
+
 function nlCard(r){
   const Lv=LIVE[r.code],p=Lv&&Lv.price?Lv.price:r.close,c=Lv&&Lv.chg_pct!=null?Lv.chg_pct:r.chg_pct,n=r.np,pl=r.plan;
   const head=`<div class="top"><div><span class="nm">${r.name}</span><span class="cd">${r.code}・${r.kind}</span>
@@ -2929,7 +3005,8 @@ function nlCard(r){
       <div><small>目標一 (+${pl.t1_pct}%)</small><b>${f(pl.t1)}</b></div><div><small>目標二</small><b>${f(pl.t2)}</b></div></div>
     <div style="font-size:13px;line-height:1.7">🕐 <b>何時出場：</b>${r.exit}</div>
     <div class="mut" style="font-size:12px">趨勢 ${pl.trend}｜風報比 ${pl.rr??'-'}｜20日 ${r.ret20!=null?sg(r.ret20)+f(r.ret20,1)+'%':'-'}</div>${pl.note?`<div class="mut" style="font-size:12px">${pl.note}</div>`:''}`;
-  return `<div class="st ${r.in_detail?'click':''}" ${r.in_detail?`onclick="lookup('${r.code}')"`:''}>${head}${body}</div>`
+  const lp=pl||(n?{entry_lo:n.lo,entry_hi:Math.min(n.close,n.hi),stop:n.stop,t1:n.t1,t2:n.t2}:null);
+  return `<div class="st ${r.in_detail?'click':''}" ${r.in_detail?`onclick="lookup('${r.code}')"`:''}>${head}${r.k?posBlock(r.code,r.k,lp,r.close,r.vma20):''}${body}</div>`
 }
 let EQ='',EK='',EF='',DF='月配',DQ='',DM='',DT='',DS='score';
 const vc=v=>({'值得買':'ok','可以考慮':'ok','普通':'warn','不建議只為配息買':'bad','不適合領息':'bad'})[v]||'';
@@ -2941,6 +3018,7 @@ function fillEtf(){const el=$('#elist');if(!el)return;
       <div class="price"><div class="p ${cls(c)}">${f(p)}</div><div class="${cls(c)}">${sg(c)}${f(c)}%</div><div class="mut" style="font-size:11px">20日 ${r.ret20!=null?sg(r.ret20)+f(r.ret20,1)+'%':'-'}</div></div></div>
       <div class="plan"><div><small>建議進場</small><b class="up">${f(pl.entry_lo)}~${f(pl.entry_hi)}</b></div><div><small>停損 (${pl.stop_pct}%)</small><b class="down">${f(pl.stop)}</b></div>
         <div><small>目標一 (+${pl.t1_pct}%)</small><b>${f(pl.t1)}</b></div><div><small>目標二</small><b>${f(pl.t2)}</b></div></div>
+      ${posBlock(r.code,r.k,pl,r.close,r.vma20)}
       <div class="mut" style="font-size:12px">趨勢 ${pl.trend}｜風報比 ${pl.rr??'-'}｜${r.freq?r.freq+(r.yield!=null?' 殖利率 '+f(r.yield)+'%':''):'近一年沒有配息'}
       ${r.dv?`｜領息判斷 <span class="vtag ${vc(r.dv)}">${r.dv}</span>`:''}</div>${pl.note?`<div class="mut" style="font-size:12px">${pl.note}</div>`:''}</div>`}).join('')||'<div class=mut>沒有符合的 ETF</div>'}
 function fillDiv(){const el=$('#dlist');if(!el)return;
@@ -3235,6 +3313,7 @@ function renderLiveBox(code){
   box.innerHTML=`<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:baseline"><b style="font-size:20px" class="${cls(L.chg_pct)}">${f(L.price)}</b><span class="${cls(L.chg_pct)}">${sg(L.chg_pct)}${f(L.chg_pct)}%</span>
     <span class="mut">${L.time||''}・總量 ${f(L.v,0)} 張・${L.tv!=null?'單量 '+f(L.tv,0)+' 張':''}</span></div>
     <div class="five" style="margin-top:6px"><div><b class="down">委賣（賣方）</b><table>${[...L.asks].reverse().map(x=>row(x,'down')).join('')}</table></div><div><b class="up">委買（買方）</b><table>${L.bids.map(x=>row(x,'up')).join('')}</table></div></div>
+    ${L.outP!=null?`<div style="font-size:12.5px;margin-top:4px">外盤（主動買進）<b class="up">${f(L.outV,0)}</b> 張 ${f(L.outP,0)}%／內盤（主動賣出）<b class="down">${f(L.inV,0)}</b> 張 ${f(100-L.outP,0)}%：${L.outP>=55?'買方比較積極，買氣旺':L.outP<=45?'賣方比較積極，賣壓重':'買賣力道差不多'}</div>`:''}
     <div class="mut" style="font-size:12.5px;margin-top:4px">五檔委買 ${f(bsum,0)} 張 / 委賣 ${f(asum,0)} 張：${bsum>asum*1.3?'買方掛單較多，承接力道強':asum>bsum*1.3?'賣方掛單較多，上方賣壓重':'買賣力道接近'}</div>${chart}`;
 }
 async function detailLive(code){
